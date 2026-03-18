@@ -64,7 +64,7 @@ AI-RESUME-MATCHING/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/AI-Resume-Matching.git
+git clone https://github.com/mahnurrajput/AI-Resume-Matching.git
 cd AI-Resume-Matching
 ```
 
