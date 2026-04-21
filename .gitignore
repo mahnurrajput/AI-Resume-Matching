@@ -12,13 +12,21 @@ __pycache__/
 *.pyo
 
 # Model artifacts and outputs
-models/
 outputs/
 *.pkl
 *.pickle
 *.index
 *.npy
 *.npz
+
+# Generated model artifacts 
+models/faiss_index.bin
+models/job_embeddings.npy
+models/resume_embeddings.npy
+models/job_metadata.csv
+models/resume_metadata.csv
+models/index_config.json
+
 
 # Jupyter
 .ipynb_checkpoints/
