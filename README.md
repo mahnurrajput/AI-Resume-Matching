@@ -129,6 +129,9 @@ AI-Resume-Matching/
 └── README.md                      # This file
 ```
 
+Link to folders and files > 100MB:
+https://drive.google.com/drive/folders/1ZxS0OCNjpIsh6QPBzP_LSdf_rqNh6lZn?usp=sharing
+
 ---
 
 ## 📊 Dataset Summary
