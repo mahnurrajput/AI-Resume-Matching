@@ -8,7 +8,7 @@ Industry-standard, two-stage skill gap analysis pipeline:
 STAGE 1 — STRUCTURED EXTRACTION (spaCy + Taxonomy + SBERT)
   Extracts skills from both resume and job text using:
   - spaCy NER for candidate skill phrase detection
-  - 400+ skill taxonomy with exact + substring + semantic matching
+  - 400+ skill taxonomy with exact + word-boundary substring + semantic matching
   - SBERT cosine similarity for synonym resolution (k8s → kubernetes, etc.)
   Produces deterministic, structured skill sets — fast and reproducible.
 
@@ -153,7 +153,7 @@ SKILL_TAXONOMY: Dict[str, List[str]] = {
     ],
 
     "culinary_hospitality": [
-        "chef", "head chef", "sous chef", "menu planning", "menu design",
+        "chef", "head chef", "sous chef", "menu planning",
         "food preparation", "kitchen management", "kitchen operations", "inventory control",
         "food costing", "portion sizing", "supplier coordination", "food safety", "haccp",
         "italian cuisine", "continental cuisine", "baking", "pastry", "fine dining",
@@ -161,44 +161,45 @@ SKILL_TAXONOMY: Dict[str, List[str]] = {
     ],
 }
 
-# Canonical alias map — resolves abbreviations and common synonyms
+# Canonical alias map — resolves abbreviations and common synonyms.
+# These are applied during NER candidate resolution AND during keyword scanning.
 SKILL_ALIASES: Dict[str, str] = {
-    "py"              : "python",
-    "js"              : "javascript",
-    "ts"              : "typescript",
-    "k8s"             : "kubernetes",
-    "node"            : "node.js",
-    "react js"        : "react",
-    "angular js"      : "angular",
-    "ml"              : "machine learning",
-    "dl"              : "deep learning",
-    "cv"              : "computer vision",
-    "nlp"             : "natural language processing",
-    "postgres"        : "postgresql",
-    "mongo"           : "mongodb",
-    "elastic"         : "elasticsearch",
-    "tf"              : "tensorflow",
-    "sklearn"         : "scikit-learn",
-    "hf"              : "hugging face",
-    "ci cd"           : "ci/cd",
-    "ci-cd"           : "ci/cd",
-    "aws cloud"       : "aws",
-    "dotnet"          : ".net",
-    "dot net"         : ".net",
-    "asp net"         : "asp.net",
-    "spring framework": "spring",
-    "spring-boot"     : "spring boot",
-    "jee"             : "j2ee",
-    "iac"             : "infrastructure as code",
-    "gh actions"      : "github actions",
-    "llms"            : "large language model",
-    "gpt-4"           : "large language model",
-    "openai api"      : "large language model",
-    "sql db"          : "sql",
-    "rdbms"           : "relational database",
-    "haccp compliance" : "haccp",
+    "py"                   : "python",
+    "js"                   : "javascript",
+    "ts"                   : "typescript",
+    "k8s"                  : "kubernetes",
+    "node"                 : "node.js",
+    "react js"             : "react",
+    "angular js"           : "angular",
+    "ml"                   : "machine learning",
+    "dl"                   : "deep learning",
+    "cv"                   : "computer vision",
+    "nlp"                  : "natural language processing",
+    "postgres"             : "postgresql",
+    "mongo"                : "mongodb",
+    "elastic"              : "elasticsearch",
+    "tf"                   : "tensorflow",
+    "sklearn"              : "scikit-learn",
+    "hf"                   : "hugging face",
+    "ci cd"                : "ci/cd",
+    "ci-cd"                : "ci/cd",
+    "aws cloud"            : "aws",
+    "dotnet"               : ".net",
+    "dot net"              : ".net",
+    "asp net"              : "asp.net",
+    "spring framework"     : "spring",
+    "spring-boot"          : "spring boot",
+    "jee"                  : "j2ee",
+    "iac"                  : "infrastructure as code",
+    "gh actions"           : "github actions",
+    "llms"                 : "large language model",
+    "gpt-4"                : "large language model",
+    "openai api"           : "large language model",
+    "sql db"               : "sql",
+    "rdbms"                : "relational database",
+    "haccp compliance"     : "haccp",
     "food safety standards": "food safety",
-    "menu design"     : "menu planning",
+    "menu design"          : "menu planning",
 }
 
 # Build flat index and reverse map
@@ -210,6 +211,33 @@ for _cat, _skills in SKILL_TAXONOMY.items():
         ALL_SKILLS_FLAT.append(_sk)
         SKILL_TO_CATEGORY[_sk] = _cat
 
+# Pre-compile word-boundary regex patterns for every taxonomy skill.
+# Used by both _match() (substring stage) and _keyword_scan().
+# Skills with special regex characters (c++, c#, .net, ci/cd) use a lookaround
+# pattern instead of \b because \b does not work around non-word characters.
+_SKILL_PATTERNS: Dict[str, re.Pattern] = {}
+for _sk in ALL_SKILLS_FLAT:
+    _escaped = re.escape(_sk)
+    _SKILL_PATTERNS[_sk] = re.compile(rf'(?<!\w){_escaped}(?!\w)', re.IGNORECASE)
+
+# ── Culinary domain guard ─────────────────────────────────────────────────────
+# A culinary match is only confirmed when at least this many culinary indicator
+# tokens appear in the text.  This prevents generic business words such as
+# "management", "planning", "operations" and "inventory" from accidentally
+# triggering culinary skill extraction on non-culinary (e.g. tech) resumes.
+_CULINARY_MIN_INDICATORS = 2
+_CULINARY_INDICATORS: List[str] = [
+    "chef", "kitchen", "cuisine", "culinary", "restaurant", "menu", "pastry",
+    "baking", "haccp", "catering", "sous", "banquet", "food", "dining",
+]
+
+
+def _count_culinary_indicators(text: str) -> int:
+    """Return the number of distinct culinary indicator tokens present in text."""
+    tl = text.lower()
+    return sum(1 for ind in _CULINARY_INDICATORS if re.search(rf'(?<!\w){re.escape(ind)}(?!\w)', tl))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RESULT DATACLASSES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -220,14 +248,17 @@ class StructuredSkillSets:
     Raw structured skill sets extracted from resume and job.
     Output of Stage 1 (deterministic extraction).
     """
-    resume_skills       : Dict[str, List[str]]   # {category: [skills]}
-    job_skills          : Dict[str, List[str]]   # {category: [skills]}
-    matched             : Dict[str, List[str]]   # skills in both
-    missing             : Dict[str, List[str]]   # job requires, resume lacks
-    extra               : Dict[str, List[str]]   # resume has, job doesn't need
-    unrecognized_resume : List[str]              # NER found, not in taxonomy
-    unrecognized_job    : List[str]
-    overlap_score       : float                  # Jaccard overlap 0-1
+    resume_skills            : Dict[str, List[str]]   # {category: [skills]}
+    job_skills               : Dict[str, List[str]]   # {category: [skills]}
+    matched                  : Dict[str, List[str]]   # skills in both
+    missing                  : Dict[str, List[str]]   # job requires, resume lacks
+    extra                    : Dict[str, List[str]]   # resume has, job doesn't need
+    unrecognized_resume      : List[str]              # NER found, not in taxonomy
+    unrecognized_job         : List[str]
+    unrecognized_resume_total: int                    # count before [:15] cap
+    unrecognized_job_total   : int
+    overlap_score            : float                  # Jaccard overlap 0–1
+    insufficient_data        : bool = False           # True when taxonomy matched <2 skills on either side
 
     def flat_matched(self) -> List[str]:
         return [s for v in self.matched.values() for s in v]
@@ -288,12 +319,18 @@ class SkillGapResult:
 
     @property
     def gap_severity(self) -> str:
+        # Issue 11 fix: return a dedicated value when taxonomy found too few
+        # skills on either side to produce a meaningful overlap score.
+        if self.structured.insufficient_data:
+            return "insufficient_data"
+
         if self.ai_available and self.candidacy_verdict:
             return {
                 "strong_fit"  : "low",
                 "moderate_fit": "medium",
                 "weak_fit"    : "high",
             }.get(self.candidacy_verdict, "medium")
+
         # Fallback: derive from Jaccard overlap
         s = self.structured.overlap_score
         if s >= 0.60:
@@ -314,15 +351,18 @@ class SkillGapResult:
     def to_dict(self) -> dict:
         return {
             # ── Structured (always present) ──────────────────────────────────
-            "resume_skills"       : self.structured.resume_skills,
-            "job_skills"          : self.structured.job_skills,
-            "matched_skills"      : self.structured.matched,
-            "missing_skills"      : self.structured.missing,
-            "extra_skills"        : self.structured.extra,
-            "unrecognized_resume" : self.structured.unrecognized_resume,
-            "unrecognized_job"    : self.structured.unrecognized_job,
-            "overlap_score"       : round(self.overlap_score, 4),
-            "gap_severity"        : self.gap_severity,
+            "resume_skills"            : self.structured.resume_skills,
+            "job_skills"               : self.structured.job_skills,
+            "matched_skills"           : self.structured.matched,
+            "missing_skills"           : self.structured.missing,
+            "extra_skills"             : self.structured.extra,
+            "unrecognized_resume"      : self.structured.unrecognized_resume,
+            "unrecognized_resume_total": self.structured.unrecognized_resume_total,
+            "unrecognized_job"         : self.structured.unrecognized_job,
+            "unrecognized_job_total"   : self.structured.unrecognized_job_total,
+            "overlap_score"            : round(self.overlap_score, 4),
+            "gap_severity"             : self.gap_severity,
+            "insufficient_data"        : self.structured.insufficient_data,
             # ── AI analysis ──────────────────────────────────────────────────
             "ai_available"        : self.ai_available,
             "candidacy_verdict"   : self.candidacy_verdict,
@@ -356,18 +396,35 @@ class StructuredSkillExtractor:
     """
     Deterministic, fast skill extractor using spaCy NER + taxonomy matching.
 
-        Three-stage matching pipeline per candidate:
-            1. Exact match against taxonomy
-            2. Substring match (handles "postgresql database" → "postgresql")
-            3. SBERT semantic similarity ≥ 0.72 (handles synonyms/abbreviations)
+    Three-stage matching pipeline per NER candidate:
+      1. Exact match against taxonomy
+      2. Word-boundary substring match  ("postgresql database" → "postgresql")
+      3. SBERT semantic similarity ≥ 0.78 with margin ≥ 0.08 over runner-up
 
-    Plus a direct keyword scan as a safety net for common skills that
-    NER might miss (git, sql, etc.).
+    Plus a direct keyword scan as a safety net for skills NER might miss
+    (git, sql, etc.).  Aliases (k8s → kubernetes) are applied in both paths.
+
+    The culinary_hospitality category is guarded: it only contributes results
+    when the source text contains at least two culinary indicator tokens, which
+    prevents generic business language from creating phantom culinary matches
+    in tech resumes.
     """
 
-    SEMANTIC_THRESHOLD = 0.78
+    SEMANTIC_THRESHOLD  = 0.78   # minimum cosine similarity to accept a match
+    SEMANTIC_MARGIN     = 0.08   # minimum gap between best and second-best score
 
-    def __init__(self, enable_semantic: bool = True):
+    def __init__(
+        self,
+        enable_semantic: bool = True,
+        sbert_model: Optional["SentenceTransformer"] = None,
+    ):
+        """
+        Args:
+            enable_semantic : Use SBERT semantic similarity for synonym resolution.
+            sbert_model     : Optional pre-loaded SentenceTransformer instance to
+                              share with the matching engine (avoids loading the
+                              model a second time into memory).
+        """
         self.enable_semantic = enable_semantic and _SBERT_AVAILABLE
 
         # Load spaCy — required for NER candidate extraction
@@ -381,9 +438,14 @@ class StructuredSkillExtractor:
         else:
             self.nlp = None
 
-        # Pre-encode the full taxonomy once for fast semantic similarity lookup
+        # Pre-encode the full taxonomy once for fast semantic similarity lookup.
+        # Accept a shared model instance to avoid loading ~80 MB twice when the
+        # MatchingEngine already holds one.
         if self.enable_semantic:
-            self._sbert = SentenceTransformer("all-MiniLM-L6-v2")
+            if sbert_model is not None:
+                self._sbert = sbert_model
+            else:
+                self._sbert = SentenceTransformer("all-MiniLM-L6-v2")
             self._skill_embeddings = self._sbert.encode(
                 ALL_SKILLS_FLAT,
                 convert_to_numpy=True,
@@ -396,16 +458,24 @@ class StructuredSkillExtractor:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def extract(self, text: str) -> Tuple[Dict[str, List[str]], List[str]]:
+    def extract(self, text: str) -> Tuple[Dict[str, List[str]], List[str], int]:
         """
         Extract skills from text.
 
         Returns:
-            (skills_by_category, unrecognized_candidates)
-            where skills_by_category is {category_name: [skill, ...]}
+            (skills_by_category, unrecognized_sample, unrecognized_total)
+            - skills_by_category : {category_name: [skill, ...]}
+            - unrecognized_sample: up to 15 unrecognized candidate phrases
+            - unrecognized_total : total count before the 15-item cap
+                                   (useful for UI display of "X more…")
         """
         if not text or not text.strip():
-            return {}, []
+            return {}, [], 0
+
+        # Issue 3 fix: compute culinary indicator count once for this text so
+        # the domain guard can be applied consistently in _match() and
+        # _keyword_scan() without re-scanning the text on every skill check.
+        self._culinary_indicators_in_text: int = _count_culinary_indicators(text)
 
         candidates   = self._get_candidates(text)
         matched      : Dict[str, List[str]] = {}
@@ -420,28 +490,49 @@ class StructuredSkillExtractor:
             elif len(cand) > 2:
                 unrecognized.append(cand)
 
-        # Safety-net: direct keyword scan catches skills NER misses (e.g. "git", "sql")
+        # Safety-net: keyword scan catches skills NER misses (e.g. "git", "sql").
+        # Issue 4 fix: alias substitution is applied to the text before scanning
+        # so abbreviations like "k8s" are resolved to their canonical form first.
         for cat, skills in self._keyword_scan(text).items():
             matched.setdefault(cat, [])
             for s in skills:
                 if s not in matched[cat]:
                     matched[cat].append(s)
 
-        # Clean unrecognized: remove anything that's actually in taxonomy
-        unrecognized = list(set(
+        # Clean unrecognized list: drop anything already covered by taxonomy.
+        # Issue 11 fix: preserve the total count before applying the cap.
+        all_unrecognized = list(set(
             u for u in unrecognized
-            if not any(u in sk or sk in u for sk in ALL_SKILLS_FLAT if len(sk) >= 3)
-        ))[:15]
+            if not any(
+                re.search(rf'(?<!\w){re.escape(sk)}(?!\w)', u)
+                for sk in ALL_SKILLS_FLAT if len(sk) >= 3
+            )
+        ))
+        unrecognized_total  = len(all_unrecognized)
+        unrecognized_sample = all_unrecognized[:15]
 
-        return matched, unrecognized
+        return matched, unrecognized_sample, unrecognized_total
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _get_candidates(self, text: str) -> List[str]:
-        """Use spaCy NER + noun chunks + tokens to build candidate skill phrases."""
+        """Use spaCy NER + noun chunks + tokens to build candidate skill phrases.
+
+        The input text is capped at 12 000 characters for spaCy processing.
+        Resumes are capped upstream at 5 000 words (~30 000 chars) so this
+        only matters for unusual inputs; a warning is printed when truncation
+        actually happens.
+        """
         if not self.nlp:
             # Fallback: simple word split when spaCy is unavailable
             return list(set(text.lower().split()))
+
+        # Issue 9 fix: warn when text is silently truncated for spaCy.
+        if len(text) > 12000:
+            print(
+                f"  [SkillAnalyzer] Input text ({len(text):,} chars) exceeds spaCy "
+                f"processing limit — truncated to 12 000 chars for NER extraction."
+            )
 
         doc   = self.nlp(text[:12000])
         cands = set()
@@ -453,7 +544,7 @@ class StructuredSkillExtractor:
                 if 2 < len(c) < 50:
                     cands.add(SKILL_ALIASES.get(c, c))
 
-        # Noun chunks (e.g. "machine learning engineer" → "machine learning")
+        # Noun chunks (e.g. "machine learning engineer" → root "machine learning")
         for chunk in doc.noun_chunks:
             for candidate in (chunk.root.text.lower().strip(), chunk.text.lower().strip()):
                 if 2 < len(candidate) < 60:
@@ -473,14 +564,21 @@ class StructuredSkillExtractor:
 
         return list(cands)
 
+    def _is_culinary_allowed(self) -> bool:
+        """Return True only when the source text has enough culinary context."""
+        return self._culinary_indicators_in_text >= _CULINARY_MIN_INDICATORS
+
     def _match(self, candidate: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Attempt to match a candidate phrase to a known taxonomy skill.
 
         Matching order (fast-to-slow):
           1. Exact match
-          2. Substring match (handles "postgresql database" → "postgresql")
-          3. Semantic similarity for synonym resolution
+          2. Word-boundary substring match  (issue 1 fix: uses regex, not `in`)
+          3. SBERT semantic similarity with margin guard (issue 4 fix: always applied)
+
+        Issue 3 fix: culinary category matches are suppressed when the source
+        text does not contain enough culinary indicator tokens.
         """
         if not candidate or len(candidate) < 2:
             return None, None
@@ -489,16 +587,24 @@ class StructuredSkillExtractor:
 
         # 1. Exact match
         if cl in SKILL_TO_CATEGORY:
-            return SKILL_TO_CATEGORY[cl], cl
+            cat = SKILL_TO_CATEGORY[cl]
+            if cat == "culinary_hospitality" and not self._is_culinary_allowed():
+                return None, None
+            return cat, cl
 
-        # Substring
-        # Only allow taxonomy-skill-in-candidate direction to avoid noisy
-        # matches like "design" -> "responsive design" and "restaurant" -> "rest".
+        # 2. Word-boundary substring match
+        # Issue 1 fix: replaced raw `sk in cl` with a compiled word-boundary
+        # pattern so "restaurant" does not match "rest", "planning" does not
+        # match "menu planning" from the wrong direction, etc.
+        # Only skills of length >= 5 are tried to avoid trivially short matches.
         for sk in ALL_SKILLS_FLAT:
-            if len(sk) >= 5 and sk in cl:
-                return SKILL_TO_CATEGORY[sk], sk
+            if len(sk) >= 5 and _SKILL_PATTERNS[sk].search(cl):
+                cat = SKILL_TO_CATEGORY[sk]
+                if cat == "culinary_hospitality" and not self._is_culinary_allowed():
+                    continue
+                return cat, sk
 
-        # Semantic
+        # 3. Semantic similarity
         if self.enable_semantic and self._skill_embeddings is not None:
             try:
                 vec = self._sbert.encode(
@@ -507,35 +613,65 @@ class StructuredSkillExtractor:
                     normalize_embeddings=True,
                     show_progress_bar=False,
                 )
-                sims     = vec @ self._skill_embeddings.T
-                best_idx = int(np.argmax(sims))
+                sims       = vec @ self._skill_embeddings.T   # shape (1, N)
+                best_idx   = int(np.argmax(sims))
                 best_score = float(sims[0, best_idx])
-                # Require a clear winner over the second-best skill to reduce
-                # noisy cross-domain matches on non-technical text.
+
+                # Issue 4 fix: compute second_best unconditionally so the margin
+                # guard always applies regardless of taxonomy size.
                 if sims.shape[1] > 1:
                     second_best = float(np.partition(sims[0], -2)[-2])
                 else:
-                    second_best = 0.0
+                    # Single-skill taxonomy edge case — treat margin as satisfied.
+                    second_best = best_score - self.SEMANTIC_MARGIN
 
-                if best_score >= self.SEMANTIC_THRESHOLD and (best_score - second_best) >= 0.08:
-                    sk = ALL_SKILLS_FLAT[best_idx]
-                    return SKILL_TO_CATEGORY[sk], sk
+                if (
+                    best_score >= self.SEMANTIC_THRESHOLD
+                    and (best_score - second_best) >= self.SEMANTIC_MARGIN
+                ):
+                    sk  = ALL_SKILLS_FLAT[best_idx]
+                    cat = SKILL_TO_CATEGORY[sk]
+                    # Issue 3 fix: apply culinary guard to semantic matches too.
+                    if cat == "culinary_hospitality" and not self._is_culinary_allowed():
+                        return None, None
+                    return cat, sk
             except Exception:
                 pass
 
         return None, None
 
     def _keyword_scan(self, text: str) -> Dict[str, List[str]]:
+        """
+        Direct keyword scan of the full text for every taxonomy skill.
+
+        Issue 4 fix: aliases are substituted into the text before scanning so
+        abbreviations like "k8s", "tf", "sklearn" are resolved to their
+        canonical taxonomy names and will be found by the scan.
+
+        Issue 1 / Issue 3 fix: uses the same pre-compiled word-boundary patterns
+        as _match() and respects the culinary domain guard.
+        """
+        # Apply alias substitutions to a lowercased copy of the text.
+        # Longer aliases are substituted before shorter ones to avoid partial
+        # replacement (e.g. "food safety standards" before "food safety").
         tl = text.lower()
+        for alias, canonical in sorted(SKILL_ALIASES.items(), key=lambda x: -len(x[0])):
+            alias_pattern = re.compile(rf'(?<!\w){re.escape(alias)}(?!\w)')
+            tl = alias_pattern.sub(canonical, tl)
+
+        culinary_allowed = self._is_culinary_allowed()
+
         found: Dict[str, List[str]] = {}
         for sk in ALL_SKILLS_FLAT:
-            escaped = re.escape(sk)
-            # For symbol-heavy skills (c++, c#, .net, ci/cd), word boundaries are too strict.
-            if re.search(rf'(?<!\w){escaped}(?!\w)', tl):
-                cat = SKILL_TO_CATEGORY[sk]
+            cat = SKILL_TO_CATEGORY[sk]
+            # Issue 3 fix: skip culinary skills when domain guard not satisfied.
+            if cat == "culinary_hospitality" and not culinary_allowed:
+                continue
+            if _SKILL_PATTERNS[sk].search(tl):
                 found.setdefault(cat, [])
                 if sk not in found[cat]:
                     found[cat].append(sk)
+
         return found
 
 
@@ -689,10 +825,10 @@ class AISkillReasoningEngine:
 
     def _generate_with_fallback(self, prompt: str) -> Dict[str, Any]:
         """Try each model in MODEL_CANDIDATES and return the first valid JSON response."""
-        saw_not_found = False
-        saw_quota_or_rate = False
-        saw_service_unavailable = False
-        saw_other_error = False
+        saw_not_found            = False
+        saw_quota_or_rate        = False
+        saw_service_unavailable  = False
+        saw_other_error          = False
 
         for model_name in self.MODEL_CANDIDATES:
             try:
@@ -710,7 +846,7 @@ class AISkillReasoningEngine:
                 if any(k in msg for k in ("not_found", "not found", "not supported", "404")):
                     saw_not_found = True
                     continue
-                # Keep trying on transient service/rate-limit issues.
+                # Keep trying on transient service / rate-limit issues
                 if any(k in msg for k in (
                     "503", "502", "500", "504", "429", "unavailable",
                     "resource exhausted", "rate", "deadline", "timeout", "temporar"
@@ -748,15 +884,28 @@ class AISkillReasoningEngine:
         """
         Call Gemini to produce AI-powered skill gap reasoning.
 
+        Issue 7 fix: text is truncated to 6 000 characters (≈1 200 words) rather
+        than 4 000 characters (≈800 words) to capture more of longer resumes.
+        The strategy is first-2000 + last-1000 chars so important content at the
+        end (recent roles, key projects) is not silently dropped.
+
         Returns a dict with all AI fields, or {} if unavailable.
         """
         if self._client is None:
             return {}
 
-        # Cap inputs at 4 000 chars each — most signal is in the first portion
+        def _smart_truncate(text: str, limit: int) -> str:
+            """Keep the start and tail of the text when truncation is needed."""
+            text = text.strip()
+            if len(text) <= limit:
+                return text
+            head = int(limit * 0.70)   # 70 % from the front
+            tail = limit - head        # 30 % from the end
+            return text[:head] + "\n…[truncated]…\n" + text[-tail:]
+
         prompt = _ANALYSIS_PROMPT.format(
-            resume_text         = resume_text.strip()[:4000],
-            job_text            = job_text.strip()[:4000],
+            resume_text         = _smart_truncate(resume_text, 6000),
+            job_text            = _smart_truncate(job_text,    6000),
             resume_skills       = json.dumps(structured.resume_skills),
             job_skills          = json.dumps(structured.job_skills),
             matched             = json.dumps(structured.flat_matched()),
@@ -799,11 +948,31 @@ class SkillAnalyzer:
         result.dealbreaker_skills
         result.learning_path
         result.candidacy_verdict
+
+    Issue 6 fix: accepts an optional pre-loaded sbert_model so the calling
+    MatchingEngine can share its already-loaded SentenceTransformer instance
+    instead of loading a second identical model into memory.
     """
 
-    def __init__(self, enable_semantic: bool = True, enable_ai: bool = True):
+    def __init__(
+        self,
+        enable_semantic : bool = True,
+        enable_ai       : bool = True,
+        sbert_model     : Optional["SentenceTransformer"] = None,
+    ):
+        """
+        Args:
+            enable_semantic : Use SBERT semantic similarity in Stage 1.
+            enable_ai       : Initialise the Gemini Stage 2 engine.
+            sbert_model     : Optional pre-loaded SentenceTransformer to share.
+                              When provided the extractor will not load a second
+                              copy of all-MiniLM-L6-v2 (~80 MB).
+        """
         print("  Loading SkillAnalyzer (Stage 1: spaCy + SBERT)...")
-        self._extractor = StructuredSkillExtractor(enable_semantic=enable_semantic)
+        self._extractor = StructuredSkillExtractor(
+            enable_semantic=enable_semantic,
+            sbert_model=sbert_model,
+        )
 
         if enable_ai:
             print("  Loading AISkillReasoningEngine (Stage 2: Gemini API)...")
@@ -832,8 +1001,10 @@ class SkillAnalyzer:
                              AI fields populated only when API call succeeds.
         """
         # ── Stage 1: Structured Extraction ───────────────────────────────────
-        resume_skills, unrec_resume = self._extractor.extract(resume_text)
-        job_skills,    unrec_job    = self._extractor.extract(job_text)
+        # Issue 11 fix: extract() now returns a third value — the total
+        # unrecognized count before the 15-item cap.
+        resume_skills, unrec_resume, unrec_resume_total = self._extractor.extract(resume_text)
+        job_skills,    unrec_job,    unrec_job_total    = self._extractor.extract(job_text)
 
         # Set-algebra per category to compute matched / missing / extra
         all_cats = set(list(resume_skills.keys()) + list(job_skills.keys()))
@@ -856,17 +1027,26 @@ class SkillAnalyzer:
         n_job  = sum(len(v) for v in job_skills.values())
         n_both = sum(len(v) for v in matched.values())
         union  = n_res + n_job - n_both
+
+        # Issue 11 fix: flag when taxonomy matched too few skills on either
+        # side to produce a meaningful overlap score.  Threshold is 2 skills —
+        # below that the domain is genuinely outside the taxonomy (e.g. legal,
+        # creative writing) and the score should not be interpreted as "high gap".
+        insufficient_data = (n_res < 2 or n_job < 2)
         overlap = n_both / union if union > 0 else 0.0
 
         structured = StructuredSkillSets(
-            resume_skills       = resume_skills,
-            job_skills          = job_skills,
-            matched             = matched,
-            missing             = missing,
-            extra               = extra,
-            unrecognized_resume = unrec_resume,
-            unrecognized_job    = unrec_job,
-            overlap_score       = overlap,
+            resume_skills            = resume_skills,
+            job_skills               = job_skills,
+            matched                  = matched,
+            missing                  = missing,
+            extra                    = extra,
+            unrecognized_resume      = unrec_resume,
+            unrecognized_resume_total= unrec_resume_total,
+            unrecognized_job         = unrec_job,
+            unrecognized_job_total   = unrec_job_total,
+            overlap_score            = overlap,
+            insufficient_data        = insufficient_data,
         )
 
         # ── Stage 2: AI Reasoning ─────────────────────────────────────────────
@@ -877,16 +1057,24 @@ class SkillAnalyzer:
             ai_data      = self._ai.analyze(resume_text, job_text, structured)
             ai_available = bool(ai_data)
 
-        # Parse AI output into typed fields
+        # Parse AI output into typed fields.
+        # Issue 10 fix: learning_priority is cast safely; malformed string
+        # values from the model (e.g. "high") fall back to 5 instead of raising.
         skill_insights: List[AISkillInsight] = []
         for si in ai_data.get("skill_insights", []):
             try:
+                lp_raw = si.get("learning_priority", 5)
+                try:
+                    learning_priority = int(lp_raw)
+                except (ValueError, TypeError):
+                    learning_priority = 5
+
                 skill_insights.append(AISkillInsight(
                     skill             = str(si.get("skill", "")),
                     importance        = str(si.get("importance", "important")),
                     is_dealbreaker    = bool(si.get("is_dealbreaker", False)),
                     compensation      = str(si.get("compensation", "")),
-                    learning_priority = int(si.get("learning_priority", 5)),
+                    learning_priority = learning_priority,
                 ))
             except Exception:
                 pass
@@ -921,6 +1109,11 @@ def get_analyzer(enable_semantic: bool = True, enable_ai: bool = True) -> SkillA
 
     If the cached instance was created with lower capabilities than requested
     (e.g. AI was disabled, now requested), the instance is recreated.
+
+    Issue 5 fix: the AI-upgrade check now inspects _ai._client is None rather
+    than _ai is None, because AISkillReasoningEngine is always instantiated but
+    its internal client is None when the API key is missing.  This means the
+    singleton will be properly recreated after the user sets a key and retries.
     """
     global _default_analyzer
 
@@ -931,10 +1124,17 @@ def get_analyzer(enable_semantic: bool = True, enable_ai: bool = True) -> SkillA
         )
         return _default_analyzer
 
-    needs_ai_upgrade = enable_ai and (_default_analyzer._ai is None)
+    # Determine whether the cached instance has lower capabilities than needed.
+    existing_ai_client = (
+        None
+        if _default_analyzer._ai is None
+        else getattr(_default_analyzer._ai, "_client", None)
+    )
+    needs_ai_upgrade = enable_ai and (existing_ai_client is None)
     needs_sem_upgrade = (
         enable_semantic and not _default_analyzer._extractor.enable_semantic
     )
+
     if needs_ai_upgrade or needs_sem_upgrade:
         _default_analyzer = SkillAnalyzer(
             enable_semantic=enable_semantic,
@@ -1010,13 +1210,19 @@ if __name__ == "__main__":
     print(f"  Matched        : {result.flat_matched()}")
     print(f"  Missing        : {result.flat_missing()}")
     print(f"  Overlap score  : {result.overlap_score:.2%}")
+    print(f"  Gap severity   : {result.gap_severity}")
+    if result.structured.insufficient_data:
+        print("  NOTE: Insufficient taxonomy coverage — overlap score may not be meaningful.")
+    if result.structured.unrecognized_resume_total > 15:
+        print(f"  Unrecognized (resume): showing 15 of {result.structured.unrecognized_resume_total} total")
+    if result.structured.unrecognized_job_total > 15:
+        print(f"  Unrecognized (job):    showing 15 of {result.structured.unrecognized_job_total} total")
 
     if result.ai_available:
         print(f"\n{'─'*60}")
         print("  STAGE 2 — AI Analysis (Gemini)")
         print(f"{'─'*60}")
         print(f"  Verdict        : {result.candidacy_verdict} (confidence: {result.verdict_confidence})")
-        print(f"  Gap severity   : {result.gap_severity}")
         print(f"\n  Executive Summary:")
         print(f"  {result.executive_summary}")
         print(f"\n  Dealbreakers   : {result.dealbreaker_skills}")
