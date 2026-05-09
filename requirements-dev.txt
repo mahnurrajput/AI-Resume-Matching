@@ -1,0 +1,145 @@
+# =========================
+# CORE STACK (SAFE FIXES)
+# =========================
+numpy>=2.1.0
+pandas>=2.2.0
+scipy>=1.14.0
+scikit-learn>=1.5.0
+
+# =========================
+# NLP CORE (KEEP YOUR SPA CY STACK)
+# =========================
+spacy==3.8.11
+thinc==8.3.10
+weasel==0.4.3
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+blis==1.3.3
+murmurhash==1.0.15
+cymem==2.0.13
+preshed==3.0.12
+srsly==2.5.2
+catalogue==2.0.10
+confection==0.1.5
+wasabi==1.1.3
+cloudpathlib==0.23.0
+
+# spaCy model
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# =========================
+# TRANSFORMERS / ML (FIXED FOR REALITY)
+# =========================
+torch>=2.4.0
+transformers>=4.45.0
+sentence-transformers>=3.0.1
+tokenizers>=0.20.0
+huggingface_hub>=0.25.0
+safetensors>=0.4.5
+
+# =========================
+# VECTOR SEARCH
+# =========================
+faiss-cpu>=1.9.0
+
+# =========================
+# API STACK
+# =========================
+fastapi==0.135.1
+uvicorn==0.42.0
+starlette==0.52.1
+anyio==4.12.1
+h11==0.16.0
+httpx==0.28.1
+httpcore==1.0.9
+
+# =========================
+# UI STACK
+# =========================
+streamlit==1.55.0
+altair==6.0.0
+pydeck==0.9.1
+watchdog==6.0.0
+
+# =========================
+# DATA / FILE PROCESSING
+# =========================
+pdfminer.six==20251230
+pdfplumber==0.11.9
+python-docx==1.2.0
+pypdfium2==5.6.0
+lxml==6.0.2
+pillow==12.1.1
+
+# =========================
+# UTILITIES
+# =========================
+requests==2.32.5
+urllib3==2.6.3
+certifi==2026.2.25
+tqdm==4.67.3
+regex==2026.2.28
+joblib==1.5.3
+PyYAML==6.0.3
+rich==14.3.3
+tenacity==9.1.4
+six==1.17.0
+
+# =========================
+# GOOGLE GENAI (NEW ADDITION)
+# =========================
+google-genai==1.73.1
+
+# =========================
+# VISUALIZATION
+# =========================
+matplotlib==3.10.8
+seaborn==0.13.2
+
+# =========================
+# SYSTEM / TYPES
+# =========================
+pydantic==2.12.5
+pydantic_core==2.41.5
+annotated-types==0.7.0
+typing_extensions==4.15.0
+typing-inspection==0.4.2
+
+# =========================
+# SYSTEM SUPPORT
+# =========================
+attrs==25.4.0
+click==8.3.1
+colorama==0.4.6
+packaging==26.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==0.30.0
+pyarrow==23.0.1
+protobuf==6.33.5
+
+# =========================
+# SECURITY / CRYPTO
+# =========================
+cffi>=1.17.0
+cryptography>=45.0.0
+pycparser==3.0
+
+# =========================
+# OPTIONAL MATH / SCIENCE
+# =========================
+sympy==1.14.0
+mpmath==1.3.0
+networkx==3.6.1
+
+# =========================
+# STREAMLIT SUPPORT
+# =========================
+toml==0.10.2
+tornado==6.5.5
+
+# =========================
+# ENVIRONMENT MANAGEMENT
+# =========================
+python-dotenv==1.1.1
