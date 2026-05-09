@@ -29,7 +29,6 @@ from docx import Document
 
 # ── Download model files from HF Hub if not already present ──────────────────
 from download_models import download_all
-download_all()
 
 # ── Path setup so matching_engine.py (which lives in models/) can be imported ─
 _APP_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -636,6 +635,9 @@ def render_sidebar():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+
+    download_all()
+    
     top_k, enable_skill_gap, enable_ai = render_sidebar()
 
     # ── Hero header ───────────────────────────────────────────────────────────
