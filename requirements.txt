@@ -1,7 +1,7 @@
 ﻿numpy>=1.26.0
 pandas>=2.0.0
-spacy==3.7.4
-en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+spacy==3.8.13
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 torch>=2.0.0
 sentence-transformers>=2.7.0
 transformers>=4.40.0
