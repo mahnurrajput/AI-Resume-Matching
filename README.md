@@ -1,89 +1,71 @@
 # 🤖 AI Resume–Job Matching System
 
 > An AI-powered career assistant that matches your resume with the most relevant job postings
-> and identifies your skill gaps — built with Sentence-BERT and FAISS over 124,000+ real LinkedIn jobs.
+> and identifies your skill gaps — built with Sentence-BERT and FAISS over 108,702 real LinkedIn jobs.
+
+🔗 **Live App:** [resumeiq-rjm.streamlit.app](https://resumeiq-rjm.streamlit.app)
+📁 **Repo:** [github.com/mahnurrajput/AI-Resume-Matching](https://github.com/mahnurrajput/AI-Resume-Matching)
+📦 **Hugging Face Dataset:** [huggingface.co/datasets/mahnoor-24r/ai-resume-matching-models](https://huggingface.co/datasets/mahnoor-24r/ai-resume-matching-models)
 
 
 ---
 
 ## 🎯 What This System Does
 
-This system works like a **personal career assistant**. You upload your resume, and the system:
+Upload your resume and the system:
 
-1. Reads and cleans your resume text
-2. Compares it semantically against 124,000+ real job descriptions
+1. Reads and cleans your resume text (PDF, DOCX, or plain text)
+2. Compares it semantically against 108,702 real LinkedIn job descriptions
 3. Returns the **top matching jobs** with similarity scores
-4. Shows you exactly which **skills you are missing** for those jobs
-
-**Example output:**
-
-```
-Top Job Matches
-───────────────────────────────────
-1.  Data Analyst              — 84%
-2.  Business Intelligence     — 79%
-3.  Financial Data Analyst    — 74%
-
-```
+4. Performs a **two-stage skill gap analysis** — structured extraction + AI reasoning
 
 ---
 
 ## ⚙️ How It Works
 
-The system follows this pipeline:
-
 ```
-Resume Upload (PDF / DOCX)
+Resume Upload (PDF / DOCX / TXT)
          │
          ▼
-  Text Extraction
-  (pdfplumber / python-docx)
+  Text Extraction + Cleaning
          │
          ▼
-  Text Cleaning
-  (lowercase, remove noise, normalize)
+  Sentence-BERT Embedding  (384-dim vector)
          │
          ▼
-  Sentence-BERT Embedding
-  (converts text into a 384-dim vector)
-         │
-         ▼
-  FAISS Index Search
-  (fast nearest-neighbor search over job vectors)
+  FAISS Index Search  (~17ms over 108,702 jobs)
          │
          ▼
   Cosine Similarity Ranking
          │
          ▼
-  Top Job Matches  +  Skill Gap Analysis
+  Skill Gap Analysis (Stage 1: spaCy + Taxonomy + SBERT)
          │
          ▼
-  Streamlit UI Output
+  AI Reasoning (Stage 2: Gemini API)
+         │
+         ▼
+  Streamlit UI — ranked matches + skill gap panels
 ```
-
-**Why Sentence-BERT instead of TF-IDF?**
-
-TF-IDF only matches exact keywords. Sentence-BERT understands *meaning* — so a resume
-saying "built data pipelines" will still match a job asking for "ETL experience", even
-though those words are completely different.
 
 ---
 
 ## 🛠 Tech Stack
 
-| Layer             | Tools                                      |
-|-------------------|--------------------------------------------|
-| Core AI Model     | Sentence-BERT (MiniLM-L6-v2)              |
-| Vector Search     | FAISS (Facebook AI Similarity Search)      |
-| Similarity Metric | Cosine Similarity                          |
-| NLP Processing    | spaCy, Python                              |
-| Data Handling     | pandas, numpy, scikit-learn                |
-| Visualization     | matplotlib, seaborn                        |
-| User Interface    | Streamlit                                  |
-| Backend (optional)| FastAPI + uvicorn                         |
-| File Parsing      | pdfplumber, python-docx                    |
-| Dev Tools         | Python 3.10+, VS Code, Git + GitHub        |
-| Storage           | Local CSV / JSON (no database needed)      |
+| Layer             | Tools                                               |
+|-------------------|-----------------------------------------------------|
+| Core AI Model     | Sentence-BERT (all-MiniLM-L6-v2, 384-dim)          |
+| Vector Search     | FAISS IndexFlatIP (exact cosine similarity)         |
+| AI Reasoning      | Google Gemini API (gemini-2.5-flash)                |
+| NLP / NER         | spaCy (en_core_web_sm)                              |
+| Skill Taxonomy    | Custom 400+ skills across 9 categories              |
+| Data Handling     | pandas, numpy, scikit-learn                         |
+| Visualization     | matplotlib, seaborn                                 |
+| File Parsing      | pdfplumber, python-docx                             |
+| User Interface    | Streamlit                                           |
+| Deployment        | Streamlit Cloud (free tier)                         |
+| Model Storage     | Hugging Face Hub (Dataset repo)                     |
+| Language          | Python 3.11                                         |
 
 ---
 
@@ -91,213 +73,159 @@ though those words are completely different.
 
 ```
 AI-Resume-Matching/
-│
-├── data/                          # Raw datasets — NOT uploaded to GitHub (too large)
-│   ├── resumes_raw/               # 228 real PDF/DOCX resume files
-│   ├── resumes_csv/               # resumes.csv — 2,484 resume entries
-│   ├── resumes_secondary/         # resume_data.csv — 9,500+ structured resume entries
-│   └── linkedin_dataset/          # LinkedIn job postings (~124k jobs)
-│       ├── postings.csv           # Main job listings file
-│       └── companies/
-│           └── companies.csv      # Company name lookup table
-│
-├── data_processed/                # Cleaned output files — NOT uploaded to GitHub
-│   ├── resumes_cleaned.csv        # 2,709 cleaned resumes (output of resume_pipeline.py)
-│   └── jobs_cleaned.csv           # Cleaned job postings (output of job_pipeline.py)
-│
-├── src/                           # All source code lives here
-│   ├── resume_pipeline.py         # Extracts and cleans resume text from all 3 datasets
-│   ├── job_pipeline.py            # Cleans and prepares LinkedIn job descriptions
-│   ├── eda.py                     # Generates EDA charts and statistics
-│   ├── embedder.py                # (Upcoming) Generates Sentence-BERT embeddings
-│   ├── faiss_index.py             # (Upcoming) Builds and saves the FAISS index
-│   ├── similarity.py              # (Upcoming) Matches resume vector against job vectors
-│   └── skill_gap.py               # (Upcoming) Extracts and compares skills
-│
-├── app/                           # Streamlit web interface
-│   └── app.py                     # (Upcoming) Main app file
-│
-├── models/                        # Saved embeddings and FAISS index — NOT uploaded to GitHub
-│   ├── job_embeddings.npy         # (Upcoming) NumPy array of job vectors
-│   └── faiss_index.bin            # (Upcoming) FAISS index file
-│
-├── outputs/                       # Generated outputs — NOT uploaded to GitHub
-│   └── eda/                       # EDA charts saved here (11 PNG files)
-│
-├── .gitignore                     # Prevents large files from being pushed
-├── requirements.txt               # All Python dependencies with versions
-└── README.md                      # This file
+├── app.py                      ← Phase 5: Streamlit web UI (main entry point)
+├── download_models.py          ← Phase 5: HF Hub model download script (runs at startup)
+├── requirements.txt            ← Phase 5: Production dependencies for Streamlit Cloud
+├── requirements-dev.txt        ← Dev-only: pinned exact versions for local reproducibility
+├── upload_to_hf.py             ← Phase 5: One-time script to upload large files to HF Hub
+├── .streamlit/
+│   └── config.toml             ← Phase 5: Streamlit server config (port 8501, dark theme)
+├── models/
+│   ├── matching_engine.py      ← Phase 3 Step 3: Core matching + skill gap integration
+│   ├── skill_analyzer.py       ← Phase 3 Step 4: Two-stage skill gap analysis
+│   ├── faiss_index.bin         ← gitignored — hosted on HF Hub
+│   ├── job_metadata.csv        ← gitignored — hosted on HF Hub
+│   ├── resume_metadata.csv     ← gitignored — hosted on HF Hub
+│   ├── job_embeddings.npy      ← gitignored — hosted on HF Hub
+│   ├── resume_embeddings.npy   ← gitignored — hosted on HF Hub
+│   └── index_config.json
+├── data/                       ← gitignored (raw datasets)
+│   ├── dataset_secondary
+│   ├── linkedin_dataset
+│   ├── resumes_csv
+│   ├── resumes_raw
+│   └── resumes_secondary
+├── data_processed/             ← gitignored (cleaned CSVs — jobs_cleaned.csv on HF Hub)
+├── data_scripts/
+│   ├── eda.py
+│   ├── job_pipeline.py
+│   └── resume_pipeline.py
+├── evaluation/
+│   ├── evaluate_matching.py
+├── outputs/                    ← gitignored (EDA charts, evaluation plots)
+│   ├── eda
+│   └── evaluation
+├── venv
+├── .env
+└── .gitignore
 ```
-
-Link to folders and files > 100MB:
-https://drive.google.com/drive/folders/1ZxS0OCNjpIsh6QPBzP_LSdf_rqNh6lZn?usp=sharing
 
 ---
 
 ## 📊 Dataset Summary
 
-### Resume Datasets
+### Resumes — Three Sources
 
-| Dataset   | Format      | Size           | Role in System                      |
+| Dataset   | Format      | Size           | Notes                               |
 |-----------|-------------|----------------|-------------------------------------|
-| Dataset 1 | PDF / DOCX  | 228 files      | Real-world resume parsing tests     |
-| Dataset 2 | CSV         | 2,484 entries  | Main scalable resume text source    |
-| Dataset 3 | CSV         | 9,500+ entries | Validation and skill analysis       |
+| Dataset 1 | PDF / DOCX  | 228 files      | Real resume files                   |
+| Dataset 2 | CSV         | 2,484 entries  | 25 labeled categories — used for evaluation |
+| Dataset 3 | CSV         | 9,500+ entries | Structured fields reconstructed into text |
+| **Output**| CSV         | **11,654 rows**| After deduplication and filtering   |
 
-**Combined output:** 2,709 cleaned resumes after deduplication
+### Jobs — LinkedIn Only
 
-### Job Datasets
+108,702 cleaned job postings from the LinkedIn Job Postings dataset (~124k raw).
+Fields: `title`, `description`, `skills_desc`, `company`, `location`, `experience_level`, `salary`, `work_type`, `remote_allowed`.
 
-| Dataset       | Format | Size           | Role in System                      |
-|---------------|--------|----------------|-------------------------------------|
-| LinkedIn Jobs | CSV    | ~124,000 jobs  | PRIMARY — main matching database    |
-| Dataset 6     | CSV    | ~358 MB        | Secondary — reserved for future use |
-| Analyst Jobs  | CSV    | ~2,000 entries | Small experiments only              |
+---
 
-**Why LinkedIn dataset?** It contains real recruiter-written job descriptions with rich
-fields: `title`, `description`, `skills_desc`, `experience_level`, `salary`, `location`.
-This gives the BERT model realistic language to work with.
+## 🧠 Skill Gap Analysis — Two Stages
+
+**Stage 1 — Structured Extraction** (always runs, fast):
+- spaCy NER extracts skill candidates from resume and job text
+- Matched against a 400+ skill taxonomy across 9 categories
+- Alias resolution (e.g. `k8s → kubernetes`) and SBERT semantic similarity for synonyms
+- Outputs: matched skills, missing skills, overlap score, gap severity
+
+**Stage 2 — AI Reasoning** (requires `GEMINI_API_KEY`):
+- Sends resume, job description, and Stage 1 results to Gemini
+- Returns: candidacy verdict, dealbreaker skills, compensatable gaps, learning path, time-to-ready, hiring risks
 
 ---
 
 ## 🚀 Setup Instructions
 
-### Step 1 — Clone the repository
-
 ```bash
+# 1. Clone
 git clone https://github.com/mahnurrajput/AI-Resume-Matching.git
 cd AI-Resume-Matching
-```
 
-### Step 2 — Create and activate virtual environment
-
-```bash
+# 2. Create virtual environment
 python -m venv venv
-```
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # macOS / Linux
 
-```bash
-# Windows (PowerShell)
-venv\Scripts\activate
-
-# macOS / Linux
-source venv/bin/activate
-```
-
-> ⚠️ **Windows PowerShell fix** — if activation is blocked, run this once:
-> ```powershell
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-> ```
-
-### Step 3 — Install all dependencies
-
-```bash
+# 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. Set your Gemini API key (optional — enables AI reasoning)
+# Create a .env file with: GEMINI_API_KEY=your_key_here
+
+# 5. Run the app (model files download automatically from HF Hub on first run)
+streamlit run app.py
 ```
 
-### Step 4 — Download the spaCy language model
+> ⚠️ **First boot** downloads ~340 MB of model files from Hugging Face Hub. Subsequent runs skip this if files exist locally.
+
+---
+
+## ▶️ Running the Pipeline (local reproduction)
 
 ```bash
-python -m spacy download en_core_web_sm
-```
+# Process resumes
+python resume_pipeline.py
 
-### Step 5 — Add the datasets
+# Process jobs
+python job_pipeline.py
 
-Datasets are not included in this repository due to their large size.
-Place them in the correct folders manually:
+# EDA charts
+python eda.py
 
-```
-data/resumes_raw/          ← paste raw PDF/DOCX resume files here
-data/resumes_csv/          ← paste resumes.csv here
-data/resumes_secondary/    ← paste resume_data.csv here
-data/linkedin_dataset/     ← paste postings.csv and companies/companies.csv here
+# Generate embeddings (one-time, ~4 hours CPU)
+python embedding_generator.py
+
+# Build FAISS index
+python faiss_index_builder.py
+
+# Launch app
+streamlit run app.py
 ```
 
 ---
 
-## ▶️ Running the Project
+## 🧪 Key Design Decisions
 
-Always activate your virtual environment first:
+**Why light text cleaning only?**
+SBERT relies on natural sentence structure — stopwords and word relationships carry meaning. Removing them (appropriate for TF-IDF) degrades BERT-based matching.
 
-```bash
-venv\Scripts\activate
-```
+**Why IndexFlatIP (exact search)?**
+108,702 vectors fit in RAM. Exact search has zero approximation error. Approximate methods (IVFFlat, HNSW) are only needed at 1M+ vectors.
 
-Then run each step in order:
+**Why cosine similarity?**
+SBERT embeddings are directional. Cosine measures angle, not magnitude — unaffected by text length. Achieved by L2-normalizing vectors before adding to the FAISS index.
 
-```bash
-# Step 1 — Clean and process all resume datasets
-python src/resume_pipeline.py
-
-# Step 2 — Clean and process LinkedIn job descriptions
-python src/job_pipeline.py
-
-# Step 3 — Generate EDA charts and statistics
-python src/eda.py
-
-# Step 4 — Generate Sentence-BERT embeddings  [upcoming]
-python src/embedder.py
-
-# Step 5 — Build the FAISS search index  [upcoming]
-python src/faiss_index.py
-
-# Step 6 — Launch the Streamlit app  [upcoming]
-streamlit run app/app.py
-```
-
----
-
-## 🧠 Key Design Decisions
-
-### Why light text cleaning only?
-
-The pipeline does NOT remove stopwords or lemmatize text — even though many NLP tutorials
-recommend this. Here is why:
-
-Sentence-BERT was trained on full natural English sentences. It understands meaning through
-the relationships between all words in a sentence, including small words like "with", "for",
-"in". Removing these breaks the sentence structure that BERT relies on.
-
-Stopword removal and lemmatization are only appropriate for **TF-IDF** based systems.
-Since this project uses **Sentence-BERT**, preserving natural language gives better results.
-
-### Why FAISS instead of brute-force search?
-
-With 124,000 job vectors, comparing a resume against every single job one by one would be
-slow. FAISS builds an optimized index that finds the closest matches in milliseconds, even
-at this scale.
-
-### Why combine title + description + skills_desc?
-
-Each field alone is incomplete. The title is too short. The description has context but no
-skill list. The skills_desc has keywords but no context. Combining all three gives the
-embedding model the richest possible representation of each job.
+**Why Hugging Face Hub for model storage?**
+GitHub's 100 MB file limit excludes `faiss_index.bin` (159.2 MB) and `job_embeddings.npy` (159.2 MB). HF Hub is free, reliable, and has a clean Python download API.
 
 ---
 
 ## ✅ Project Progress
 
-| Phase | Task                                          | Status      |
-|-------|-----------------------------------------------|-------------|
-| 1     | Problem definition and system design          | ✅ Done      |
-| 2     | Resume data pipeline (extraction + cleaning)  | ✅ Done      |
-| 2     | Job data pipeline (LinkedIn cleaning)         | ✅ Done      |
-| 2     | EDA — charts and statistics                   | ✅ Done      |
-| 3     | Sentence-BERT embedding generation            | ⏳ Upcoming  |
-| 4     | FAISS index building                          | ⏳ Upcoming  |
-| 4     | Cosine similarity matching engine             | ⏳ Upcoming  |
-| 5     | Skill gap analysis                            | ⏳ Upcoming  |
-| 6     | Streamlit UI                                  | ⏳ Upcoming  |
+| Phase | Task                                        | Status      |
+|-------|---------------------------------------------|-------------|
+| 1     | Problem definition and system design        | ✅ Complete  |
+| 2     | Resume + job data pipelines + EDA           | ✅ Complete  |
+| 3     | SBERT embeddings + FAISS index              | ✅ Complete  |
+| 3     | Matching engine + skill gap analysis        | ✅ Complete  |
+| 4     | Evaluation (P@K, MRR, score separation)     | ✅ Complete  |
+| 5     | Streamlit UI + cloud deployment             | ✅ Complete  |
 
 ---
 
 ## 👥 Team
 
-Built as an AI course project.
-
-| Members        | 
-|--------------- |
+| Members        |
+|----------------|
 | Fatima Riaz    |
 | Mahnoor Naveed |
-
----
-
