@@ -21,8 +21,8 @@ Each MatchResult has an optional skill_gap field (SkillGapResult) containing
 both structured skill sets and AI-generated insights.
 
 File placement:
-    This file lives inside the models/ folder, alongside skill_analyzer.py
-    and the FAISS / embedding artefacts.
+    This file lives inside the models/ folder, alongside skill_analyzer.py,
+    skill_taxonomy.py, and the FAISS / embedding artefacts.
 
     Project layout expected:
         AI-Resume-Matching/
@@ -31,6 +31,8 @@ File placement:
         └── models/
             ├── matching_engine.py   ← this file
             ├── skill_analyzer.py
+            ├── skill_taxonomy.py
+            ├── embedding_generator.py
             ├── faiss_index.bin
             ├── job_metadata.csv
             ├── resume_embeddings.npy
@@ -46,11 +48,35 @@ IMPORTANT — Streamlit usage:
             return MatchingEngine()
 
         engine = get_engine()
+
+    Because @st.cache_resource shares one MatchingEngine across every
+    concurrent user session, this file uses a lock (see Fix 3 below) around
+    the two pieces of lazily-created shared state (the SkillAnalyzer and the
+    jobs CSV) so two simultaneous requests can't double-initialise or
+    interleave against them.
+
+─────────────────────────────────────────────────────────────────────────────
+CHANGELOG — fixes applied after the QA pass
+─────────────────────────────────────────────────────────────────────────────
+1. MAX_SEQ_LENGTH SYNCED WITH embedding_generator.py : this file used to
+   hardcode 384, while embedding_generator.py was raised to 512 to reduce
+   truncation. That mismatch meant queries were truncated shorter than the
+   job vectors they were being compared against. This now imports
+   MAX_SEQ_LENGTH from embedding_generator.py (same pattern already used by
+   faiss_index_builder.py for MODEL_NAME), falling back to a documented
+   default of 512 if that file isn't importable.
+2. top_k VALIDATION : match() and match_batch() now raise a clear ValueError
+   for top_k <= 0 instead of passing bad input straight into FAISS.
+3. THREAD-SAFE LAZY INIT : _load_jobs_df() and _get_skill_analyzer() are now
+   guarded by a single threading.Lock, so two concurrent requests sharing a
+   cached engine (the documented Streamlit usage above) can't both start
+   initialising the same lazy resource at once.
 """
 
 import os
 import sys
 import math
+import threading
 import traceback
 
 try:
@@ -92,7 +118,20 @@ JOB_METADATA_FILE = os.path.join(_MODELS_DIR,   "job_metadata.csv")
 JOBS_CSV_FILE     = os.path.join(_PROJECT_ROOT, "data_processed", "jobs_cleaned.csv")
 
 MODEL_NAME     = "all-MiniLM-L6-v2"
-MAX_SEQ_LENGTH = 384
+
+# Fix 1: read MAX_SEQ_LENGTH from embedding_generator.py so query-time
+# truncation always matches how the indexed job vectors were built. Falls
+# back to 512 (embedding_generator.py's current value) if that file isn't
+# importable — e.g. this module is used standalone from a different project.
+try:
+    from embedding_generator import MAX_SEQ_LENGTH as _EMBED_MAX_SEQ_LENGTH
+    MAX_SEQ_LENGTH = _EMBED_MAX_SEQ_LENGTH
+except ImportError:
+    MAX_SEQ_LENGTH = 512  # keep in sync with embedding_generator.py MAX_SEQ_LENGTH
+    print("  NOTE: could not import MAX_SEQ_LENGTH from embedding_generator.py — "
+          f"falling back to hardcoded default {MAX_SEQ_LENGTH}. Run this file from "
+          "the same directory as embedding_generator.py to avoid this.")
+
 DEFAULT_TOP_K  = 10
 
 
@@ -189,6 +228,8 @@ class MatchingEngine:
     Lazy-loaded (first time enable_skill_gap=True):
       - SkillAnalyzer       : spaCy + SBERT + optional Gemini
       - jobs_cleaned.csv    : full job text needed for skill gap analysis
+      Both are guarded by self._lazy_init_lock (Fix 3) so two concurrent
+      requests against a shared/cached engine instance can't double-init.
 
     Index alignment guarantee:
       _validate_alignment() asserts len(job_metadata) == index.ntotal at startup.
@@ -215,6 +256,12 @@ class MatchingEngine:
         self._jobs_csv_path  : str                     = jobs_csv_path
         self._jobs_df        : Optional[pd.DataFrame]  = None
         self._skill_analyzer : Optional[SkillAnalyzer] = None
+
+        # Fix 3: single lock protecting both lazy-init blocks below. Simple
+        # coarse-grained lock rather than one-lock-per-resource — the lazy
+        # init only happens once each (subsequent calls just read the cached
+        # value), so there's no real contention cost to sharing one lock.
+        self._lazy_init_lock = threading.Lock()
 
         print(f"  Engine ready — {self.index.ntotal:,} jobs indexed\n")
 
@@ -246,7 +293,7 @@ class MatchingEngine:
     def _load_model(self, model_name: str, max_seq_length: int) -> SentenceTransformer:
         m = SentenceTransformer(model_name)
         m.max_seq_length = max_seq_length
-        print(f"  SBERT model loaded  : {model_name}")
+        print(f"  SBERT model loaded  : {model_name}  (max_seq_length={max_seq_length})")
         return m
 
     def _validate_alignment(self) -> None:
@@ -273,23 +320,30 @@ class MatchingEngine:
         """
         Lazy-load jobs_cleaned.csv for skill-gap text retrieval.
 
-        The CSV is only read once per MatchingEngine instance (guarded by
-        self._jobs_df is not None).  In Streamlit wrap MatchingEngine in
-        @st.cache_resource so the same instance is reused across all reruns.
+        The CSV is only read once per MatchingEngine instance. Guarded by
+        self._lazy_init_lock (Fix 3) so two concurrent callers sharing a
+        cached engine can't both start reading the CSV at once — the second
+        caller through the lock just sees the already-loaded DataFrame.
         """
         if self._jobs_df is not None:
             return self._jobs_df
 
-        if not os.path.exists(self._jobs_csv_path):
-            raise FileNotFoundError(
-                f"jobs_cleaned.csv not found at '{self._jobs_csv_path}'. "
-                "Disable enable_skill_gap or ensure the file exists."
-            )
+        with self._lazy_init_lock:
+            # Re-check inside the lock: another thread may have already
+            # loaded it while this thread was waiting for the lock.
+            if self._jobs_df is not None:
+                return self._jobs_df
 
-        print("  Loading jobs_cleaned.csv for skill gap analysis...")
-        self._jobs_df = pd.read_csv(self._jobs_csv_path, low_memory=False)
-        print(f"  Jobs CSV loaded: {len(self._jobs_df):,} rows")
-        return self._jobs_df
+            if not os.path.exists(self._jobs_csv_path):
+                raise FileNotFoundError(
+                    f"jobs_cleaned.csv not found at '{self._jobs_csv_path}'. "
+                    "Disable enable_skill_gap or ensure the file exists."
+                )
+
+            print("  Loading jobs_cleaned.csv for skill gap analysis...")
+            self._jobs_df = pd.read_csv(self._jobs_csv_path, low_memory=False)
+            print(f"  Jobs CSV loaded: {len(self._jobs_df):,} rows")
+            return self._jobs_df
 
     def _get_skill_analyzer(self, enable_ai: bool) -> SkillAnalyzer:
         """
@@ -309,31 +363,37 @@ class MatchingEngine:
             _client is None when no API key is present.  We check _client
             (not the engine object) so the analyzer is properly recreated
             when a user provides a key and retries — not just on first call.
+
+        Fix 3: the init/upgrade block is now inside self._lazy_init_lock, so
+        two concurrent requests against a shared cached engine can't both
+        construct a SkillAnalyzer at the same time (wasted double-init) or
+        interleave calls into a half-constructed instance.
         """
-        if self._skill_analyzer is None:
-            print("  Loading SkillAnalyzer (shared SBERT model)...")
-            self._skill_analyzer = SkillAnalyzer(
-                enable_semantic=True,
-                enable_ai=enable_ai,
-                sbert_model=self.model,
+        with self._lazy_init_lock:
+            if self._skill_analyzer is None:
+                print("  Loading SkillAnalyzer (shared SBERT model)...")
+                self._skill_analyzer = SkillAnalyzer(
+                    enable_semantic=True,
+                    enable_ai=enable_ai,
+                    sbert_model=self.model,
+                )
+                return self._skill_analyzer
+
+            # AI-upgrade check: does the cached instance have a live Gemini client?
+            existing_ai_client = getattr(
+                getattr(self._skill_analyzer, "_ai", None),
+                "_client",
+                None,
             )
+            if enable_ai and existing_ai_client is None:
+                print("  Reinitializing SkillAnalyzer with AI enabled...")
+                self._skill_analyzer = SkillAnalyzer(
+                    enable_semantic=True,
+                    enable_ai=True,
+                    sbert_model=self.model,
+                )
+
             return self._skill_analyzer
-
-        # AI-upgrade check: does the cached instance have a live Gemini client?
-        existing_ai_client = getattr(
-            getattr(self._skill_analyzer, "_ai", None),
-            "_client",
-            None,
-        )
-        if enable_ai and existing_ai_client is None:
-            print("  Reinitializing SkillAnalyzer with AI enabled...")
-            self._skill_analyzer = SkillAnalyzer(
-                enable_semantic=True,
-                enable_ai=True,
-                sbert_model=self.model,
-            )
-
-        return self._skill_analyzer
 
     # ── Embedding ─────────────────────────────────────────────────────────────
 
@@ -422,7 +482,7 @@ class MatchingEngine:
 
         Args:
             resume_text      : Resume text (raw or cleaned).
-            top_k            : Number of results to return.
+            top_k            : Number of results to return. Must be > 0.
             enable_skill_gap : Run skill gap analysis for each result.
                                On first call this lazy-loads spaCy + SBERT +
                                jobs_cleaned.csv — subsequent calls are fast.
@@ -435,6 +495,11 @@ class MatchingEngine:
         """
         if not resume_text or not resume_text.strip():
             raise ValueError("resume_text cannot be empty or whitespace.")
+
+        # Fix 2: reject non-positive top_k before it reaches FAISS, where
+        # behavior for k <= 0 is undefined/backend-dependent.
+        if top_k <= 0:
+            raise ValueError(f"top_k must be a positive integer, got {top_k}.")
 
         query_vec       = self._embed(resume_text)
         scores, indices = self.index.search(query_vec, top_k)
@@ -482,11 +547,14 @@ class MatchingEngine:
 
         Empty or whitespace-only strings in resume_texts are validated before
         encoding; invalid entries produce an empty inner list rather than being
-        silently passed to SBERT and returning garbage matches.
+        silently passed to SBERT and returning garbage matches. This is a
+        deliberately different contract from match() (which raises on empty
+        input) because a batch call processing hundreds of resumes shouldn't
+        abort entirely over one bad entry — see the Returns section below.
 
         Args:
             resume_texts     : List of resume text strings.
-            top_k            : Number of results per resume.
+            top_k            : Number of results per resume. Must be > 0.
             show_progress    : Show SBERT encoding progress bar.
             enable_skill_gap : Run skill gap for every result (slow).
             enable_ai        : Use Gemini Stage 2 inside skill gap.
@@ -497,6 +565,10 @@ class MatchingEngine:
         """
         if not resume_texts:
             return []
+
+        # Fix 2: same top_k guard as match().
+        if top_k <= 0:
+            raise ValueError(f"top_k must be a positive integer, got {top_k}.")
 
         # Validate each entry before touching SBERT.
         valid_mask  : List[bool] = [bool(t and t.strip()) for t in resume_texts]

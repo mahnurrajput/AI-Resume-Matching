@@ -1,0 +1,172 @@
+======================================================================
+  SKILL ANALYZER — FULL PIPELINE TEST
+======================================================================
+  Loading SkillAnalyzer (Stage 1: spaCy + SBERT)...
+Loading weights: 100%|██████████████████████████████████| 103/103 [00:00<00:00, 315.42it/s]
+  Loading AISkillReasoningEngine (Stage 2: Gemini API)...
+  SkillAnalyzer ready.
+
+Running analysis...
+
+  Total analysis time: 25.8s
+
+────────────────────────────────────────────────────────────
+  STAGE 1 — Structured Extraction
+────────────────────────────────────────────────────────────
+  Resume skills  : 14 skills across 1 categories
+  Job skills     : 10 skills across 1 categories
+  Matched        : ['chef', 'food safety', 'haccp', 'menu planning', 'restaurant operations']
+  Missing        : ['catering', 'fine dining', 'food costing', 'head chef', 'kitchen operations']
+  Overlap score  : 26.32%
+  Gap severity   : low
+
+────────────────────────────────────────────────────────────
+  STAGE 2 — AI Analysis (Gemini)
+────────────────────────────────────────────────────────────
+  Verdict        : strong_fit (confidence: high)
+
+  Executive Summary:
+  This candidate presents as a strong fit for the Head Chef role, bringing 6 years of experience encompassing critical kitchen management, menu planning, and staff leadership in high-end environments. The biggest potential risk is the lack of explicit experience with Asian fusion cuisine, a preferred but not strictly required aspect of the multi-cuisine mandate.
+
+  Dealbreakers   : []
+  Compensatable  : ["Lacks explicit 'Head Chef' title but has 6 years of 'kitchen management' and 'managed kitchen staff of 8-12 people', indicating direct experience with the responsibilities.", "Lacks explicit 'food costing' but has 'cost control' and 'portion sizing' experience, which are fundamental components of food costing.", "Lacks explicit 'fine dining' experience but has worked in 'high-end restaurants and hotel kitchens', strongly implying a fine dining environment.", "Lacks explicit 'Asian fusion' expertise but has 'Italian and Continental cuisine' experience, demonstrating multi-cuisine capability and adaptability."]
+  Strengths      : ["Extensive Kitchen Management & Leadership: With 6 years of experience including managing 8-12 staff and overseeing 'kitchen management', the candidate directly fulfills the 'Strong leadership and kitchen team management' requirement for a Head Chef.", "Comprehensive Operational Expertise: Skills in 'menu planning', 'inventory control', 'cost control', and 'food safety (HACCP compliance)' directly align with the job's needs for 'Menu design and seasonal planning', 'food costing', 'inventory management', and 'HACCP and food safety compliance'.", "Relevant Culinary Background: Expertise in 'Italian and Continental cuisine' directly covers the 'Italian' and likely the 'French' aspects of the desired 'multi-cuisine' profile.", "High-Volume, High-End Experience: Experience in 'fast-paced environments handling 200+ covers per service' and 'high-end restaurants and hotel kitchens' demonstrates capability to perform under pressure in a quality-focused setting, highly relevant to a 'Gourmet Fusion Restaurant'."]
+  Hiring Risks   : ["Lack of explicit 'Head Chef' title: Although the candidate's responsibilities clearly align with a Head Chef role (managing staff, operations), the absence of the specific title might require further probing during an interview to confirm the scope of their previous leadership authority.", "Limited explicit multi-cuisine breadth: While Italian and Continental are strong, explicit experience with Asian fusion cuisine is not mentioned, which is a preferred aspect for a 'Gourmet Fusion Restaurant' and would require some ramp-up.", "No explicit mention of 'Event catering' or 'training junior chefs': These are 'nice-to-have' skills that the candidate doesn't explicitly demonstrate, potentially indicating areas where they may need to grow into the full scope of a Head Chef role in this specific restaurant."]
+  Time to Ready  : Ready now for core Head Chef responsibilities, with 1-2 months of focused study and practice to strengthen specific Asian fusion culinary skills.
+
+  Learning Path:
+    1. Undertake a specialized course or workshop focused on Asian fusion culinary techniques and flavor profiles to quickly build specific expertise.
+    2. Develop a small portfolio of innovative Asian fusion dishes or menu concepts to demonstrate practical application and creative vision.
+    3. Seek opportunities to formalize mentorship or training skills, possibly through an online leadership course focused on culinary staff development.
+
+  Skill Insights (top missing skills):
+    • Asian fusion cuisine (important)
+      → Candidate's existing 'Italian and Continental cuisine' expertise demonstrates a strong culinary foundation and adaptability, making learning a new cuisine feasible.
+    • Event catering experience (nice_to_have)
+    • Experience training junior chefs (nice_to_have)
+      → Candidate 'managed kitchen staff of 8-12 people', which inherently involves some level of guidance and informal training, but formal training programs are not specified.
+(venv) PS C:\Users\HP\OneDrive\Desktop\AI-Resume-Matching - Copy> & "c:\Users\HP\OneDrive\Desktop\AI-Resume-Matching - Copy\venv\Scripts\python.exe" "c:/Users/HP/OneDrive/Desktop/AI-Resume-Matching - Copy/models/matching_engine.py"
+======================================================================
+  MATCHING ENGINE — STANDALONE TEST
+======================================================================
+Initializing MatchingEngine...
+  FAISS index loaded  : c:\Users\HP\OneDrive\Desktop\AI-Resume-Matching - Copy\models\faiss_index.bin  (108,702 vectors)
+  Job metadata loaded : c:\Users\HP\OneDrive\Desktop\AI-Resume-Matching - Copy\models\job_metadata.csv  (108,702 rows)
+Loading weights: 100%|█████████████████████████████████| 103/103 [00:00<00:00, 2276.29it/s]
+  SBERT model loaded  : all-MiniLM-L6-v2  (max_seq_length=512)
+  Alignment check     : OK (108,702 vectors == 108,702 metadata rows)
+  Engine ready — 108,702 jobs indexed
+
+
+[Test 1] Basic match (no skill gap, fast)...
+
+──────────────────────────────────────────────────────────────────────
+  Top 3 Matches for: Python Developer — Basic
+──────────────────────────────────────────────────────────────────────
+
+  #1  Score: 0.7469
+      Title    : Contract Developer
+      Company  : EBSCO Information Services
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+
+  #2  Score: 0.7451
+      Title    : Job Title: Python or Node.js Developer - AWS APIs Developer
+      Company  : nan
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+
+  #3  Score: 0.7405
+      Title    : Python Developer with AWS & Lambda
+      Company  : QuantumBricks
+      Location : Plano, TX
+      Level    : nan  |  Contract
+
+──────────────────────────────────────────────────────────────────────
+
+[Test 2] With skill gap (structured only, no AI)...
+  Loading jobs_cleaned.csv for skill gap analysis...
+  Jobs CSV loaded: 108,702 rows
+  Loading SkillAnalyzer (shared SBERT model)...
+  Loading SkillAnalyzer (Stage 1: spaCy + SBERT)...
+  SkillAnalyzer ready.
+
+──────────────────────────────────────────────────────────────────────
+  Top 3 Matches for: Python Developer — Structured Gap
+──────────────────────────────────────────────────────────────────────
+
+  #1  Score: 0.7469
+      Title    : Contract Developer
+      Company  : EBSCO Information Services
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+      Overlap  : 18%  (high gap)
+      Matched  : postgresql, python, django, flask
+      Missing  : elasticsearch, relational database, restful, fastapi, security+
+
+  #2  Score: 0.7451
+      Title    : Job Title: Python or Node.js Developer - AWS APIs Developer
+      Company  : nan
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+      Overlap  : 12%  (high gap)
+      Matched  : aws, s3, python, oauth
+      Missing  : dynamodb, restful, ci/cd, devops, lambda, serverless...
+
+  #3  Score: 0.7405
+      Title    : Python Developer with AWS & Lambda
+      Company  : QuantumBricks
+      Location : Plano, TX
+      Level    : nan  |  Contract
+      Overlap  : 10%  (high gap)
+      Matched  : aws, python
+      Missing  : accessibility, lambda, security+
+
+──────────────────────────────────────────────────────────────────────
+
+[Test 3] Full pipeline (structured + AI reasoning)...
+  Reinitializing SkillAnalyzer with AI enabled...
+  Loading SkillAnalyzer (Stage 1: spaCy + SBERT)...
+  Loading AISkillReasoningEngine (Stage 2: Gemini API)...
+  SkillAnalyzer ready.
+
+──────────────────────────────────────────────────────────────────────
+  Top 3 Matches for: Python Developer — Full AI Analysis
+──────────────────────────────────────────────────────────────────────
+
+  #1  Score: 0.7469
+      Title    : Contract Developer
+      Company  : EBSCO Information Services
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+      Overlap  : 18%  (medium gap)
+      Matched  : postgresql, python, django, flask
+      Missing  : elasticsearch, relational database, restful, fastapi, security+
+      Verdict  : moderate_fit (high confidence)
+      AI Note  : This candidate brings strong foundational experience in Python, Django, Flask, PostgreSQL, and REST API development, with valuable deployment skills using Docker and AWS. The biggest risk is the lack of explicit experience with FastAPI and Elasticsearch, which are key technologies mentioned in the job description.
+      Ready in : 2-3 months with focused study and project work
+
+  #2  Score: 0.7451
+      Title    : Job Title: Python or Node.js Developer - AWS APIs Developer
+      Company  : nan
+      Location : United States  [Remote OK]
+      Level    : nan  |  Contract
+      Overlap  : 12%  (medium gap)
+      Matched  : aws, s3, python, oauth
+      Missing  : dynamodb, restful, ci/cd, devops, lambda, serverless...
+      Verdict  : moderate_fit (high confidence)
+      AI Note  : This candidate presents a solid foundation as a Python developer with 4+ years of experience building and deploying backend systems on AWS (EC2, S3, RDS) using Django and Flask. However, the biggest risk is a lack of direct experience with key AWS serverless services like Lambda and DynamoDB, as well as architectural patterns such as serverless and microservices, which are central to the job's requirements.
+      Ready in : 2-3 months with focused study and practical project work.
+
+  #3  Score: 0.7405
+      Title    : Python Developer with AWS & Lambda
+      Company  : QuantumBricks
+      Location : Plano, TX
+      Level    : nan  |  Contract
+      Overlap  : 10%  (high gap)
+      Matched  : aws, python
+      Missing  : accessibility, lambda, security+
+      Verdict  : weak_fit (high confidence)
+      AI Note  : The candidate demonstrates strong foundational Python development skills, including experience with Django, Flask, REST APIs, and general AWS deployment (EC2, S3, RDS). However, the biggest risks are the explicit lack of AWS Lambda experience, which is central to the role, and the stated requirement for a banking background, which is entirely missing. There's also a significant gap in explicit experience level compared to what the role likely demands.
+      Blockers : AWS Lambda, Banking background, Security+
+      Ready in : 6-9 months with focused study and project work, primarily due to the banking domain knowledge and specific certification requirements.

@@ -1,0 +1,24 @@
+{
+  "resumes": {
+    "label": "resumes",
+    "n_texts": 11654,
+    "max_seq_length": 512,
+    "n_truncated": 2388,
+    "pct_truncated": 20.49,
+    "mean_tokens": 347.4,
+    "median_tokens": 140.0,
+    "p95_tokens": 1162.3500000000004,
+    "max_tokens": 6139
+  },
+  "jobs": {
+    "label": "jobs",
+    "n_texts": 108702,
+    "max_seq_length": 512,
+    "n_truncated": 59188,
+    "pct_truncated": 54.45,
+    "mean_tokens": 597.5,
+    "median_tokens": 549.0,
+    "p95_tokens": 1209.0,
+    "max_tokens": 4283
+  }
+}

@@ -1,7 +1,7 @@
 from huggingface_hub import HfApi
 
 api = HfApi()
-repo_id = "mahnoor-24r/ai-resume-matching-models"  # ← change this
+repo_id = "mahnoor-24r/ai-resume-matching-models"  
 
 files_to_upload = [
     ("models/faiss_index.bin",        "faiss_index.bin"),
