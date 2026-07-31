@@ -115,8 +115,21 @@ h1, h2, h3, h4 { font-family: 'Syne', sans-serif !important; }
 }
 
 /* ── Sliders / selects ───────────────────────────────────────────────────── */
-[data-testid="stSlider"] > div > div > div > div { background: var(--accent) !important; }
-[data-testid="stSelectbox"] > div > div { background: var(--bg3) !important; border-color: var(--border) !important; }
+/* Ensure numeric labels have transparent backgrounds */
+[data-testid="stSlider"] div {
+    background-color: transparent !important;
+}
+
+/* Style the slider thumb handle with the accent color */
+[data-testid="stSlider"] div[role="slider"] {
+    background-color: var(--accent) !important;
+}
+
+[data-testid="stSelectbox"] > div > div { 
+    background: var(--bg3) !important; 
+    border-color: var(--border) !important; 
+}
+
 
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"]  { background: var(--bg2) !important; border-bottom: 1px solid var(--border) !important; gap: 0.25rem; }
