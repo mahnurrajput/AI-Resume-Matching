@@ -636,7 +636,18 @@ def render_sidebar():
 
 def main():
 
-    download_all()
+    with st.spinner("Setting up model files (first run only)…"):
+        try:
+            download_all()
+        except Exception as e:
+            st.error(
+                "Couldn't download the required model files from Hugging Face Hub.\n\n"
+                f"**Error:** {e}\n\n"
+                "This is usually temporary — please wait a moment and retry."
+            )
+            if st.button("🔄 Retry download"):
+                st.rerun()
+            st.stop()
     
     top_k, enable_skill_gap, enable_ai = render_sidebar()
 
