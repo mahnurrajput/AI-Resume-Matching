@@ -336,7 +336,7 @@ class StructuredSkillExtractor:
 
         # Compute guard-indicator counts once for this text, covering every
         # guarded category (not just culinary) — see skill_taxonomy.py.
-        guard_counts: Dict[str, int] = {
+        self._guard_counts: Dict[str, int] = {
             cat: count_domain_indicators(text, cat) for cat in DOMAIN_GUARDS
         }
 
@@ -345,7 +345,7 @@ class StructuredSkillExtractor:
         unrecognized : List[str] = []
 
         for cand in candidates:
-            cat, skill = self._match(cand, guard_counts)
+            cat, skill = self._match(cand)
             if cat and skill:
                 matched.setdefault(cat, [])
                 if skill not in matched[cat]:
@@ -417,11 +417,11 @@ class StructuredSkillExtractor:
 
         return list(cands)
 
-    def _category_allowed(self, category: str, guard_counts: Dict[str, int]) -> bool:
+    def _category_allowed(self, category: str) -> bool:
         """Generalized replacement for the old _is_culinary_allowed()."""
-        return is_domain_allowed(guard_counts, category)
+        return is_domain_allowed(self._guard_counts, category)
 
-    def _match(self, candidate: str, guard_counts: Dict[str, int]) -> Tuple[Optional[str], Optional[str]]:
+    def _match(self, candidate: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Attempt to match a candidate phrase to a known taxonomy skill.
 
@@ -441,14 +441,14 @@ class StructuredSkillExtractor:
 
         if cl in SKILL_TO_CATEGORY:
             cat = SKILL_TO_CATEGORY[cl]
-            if not self._category_allowed(cat, guard_counts):
+            if not self._category_allowed(cat):
                 return None, None
             return cat, cl
 
         for sk in ALL_SKILLS_FLAT:
             if len(sk) >= 5 and SKILL_PATTERNS[sk].search(cl):
                 cat = SKILL_TO_CATEGORY[sk]
-                if not self._category_allowed(cat, guard_counts):
+                if not self._category_allowed(cat):
                     continue
                 return cat, sk
 
