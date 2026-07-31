@@ -1,0 +1,61 @@
+================================================================================
+                    PHASE 4: MATCHING SYSTEM EVALUATION REPORT
+================================================================================
+
+1. EVALUATION SCOPE
+--------------------------------------------------------------------------------
+- Total Dataset Size       : 11,654 resumes
+- Evaluated Labeled Resumes: 684 resumes across 6 categories
+- Target Index             : 108,702 vectors using all-MiniLM-L6-v2 (384-dim SBERT)
+- Total Execution Time     : 3.2 minutes
+
+
+2. KEY FINDINGS & METRICS
+--------------------------------------------------------------------------------
+
+[Strategy 1 — Retrieval Quality (Precision@K & MRR)]
+- Overall Precision@10     : 0.2899 (~29% of top-10 retrieved jobs match category)
+- Mean Reciprocal Rank (MRR): 0.3808 (First relevant hit appears between rank 2 & 3)
+- Performance Stability    : Precision remains remarkably flat across K values 
+                             (P@1 = 0.2953 to P@10 = 0.2899), indicating consistent 
+                             relevance depth.
+
+Per-Category Breakdown:
++------------------------+---------------+---------------+----------------+------------------+-----------------------+
+| Category               | Evaluated (n) | P@1 Precision | P@10 Precision | First-Hit (MRR)  | Status                |
++------------------------+---------------+---------------+----------------+------------------+-----------------------+
+| HR                     | 110           | 0.7091        | 0.6873         | 0.7934           | Strong Performance    |
+| FINANCE                | 117           | 0.4274        | 0.4803         | 0.5953           | Solid Performance     |
+| SALES                  | 116           | 0.3879        | 0.3966         | 0.5051           | Moderate Performance |
+| INFORMATION-TECHNOLOGY | 120           | 0.2000        | 0.1333         | 0.3041           | Needs Optimization    |
+| ARTS                   | 103           | 0.0291        | 0.0233         | 0.0478           | Poor Relevance Match  |
+| ADVOCATE               | 118           | 0.0169        | 0.0178         | 0.0302           | Poor Relevance Match  |
++------------------------+---------------+---------------+----------------+------------------+-----------------------+
+
+[Strategy 2 — Score Separation]
+- Mean Top-10 Cosine Score : 0.6965
+- Mean Random Pair Score   : 0.3552
+- Separation Gap           : 0.3413
+- Resumes with Positive Gap: 100.0%
+- Takeaway                 : Strong discrimination capacity. The model reliably 
+                             separates actual matching jobs from random 
+                             background noise across the vector space.
+
+[Strategy 3 — Word Count Sensitivity]
+- Sub-100 words            : No samples evaluated (n=0)
+- 100–200 words (n=6)      : P@10 = 0.3833, MRR = 0.3611
+- 200–350 words (n=38)     : P@10 = 0.2474, MRR = 0.3318
+- 350–500 words (n=44)     : P@10 = 0.3205, MRR = 0.4025
+- 500+ words (n=596)       : P@10 = 0.2894, MRR = 0.3825
+- Takeaway                 : Resume length does not negatively impact retrieval 
+                             quality. Performance remains stable even for 
+                             detailed resumes exceeding 500 words.
+
+
+3. RECOMMENDATIONS & NEXT STEPS
+--------------------------------------------------------------------------------
+1. Refine Category Keywords: Expand target job keyword sets for ADVOCATE and 
+   ARTS to fix low evaluation precision.
+2. Broad Tech Domain Handling: Sub-divide broad categories like 
+   INFORMATION-TECHNOLOGY into tighter specializations to reduce title noise.
+================================================================================

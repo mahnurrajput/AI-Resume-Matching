@@ -28,6 +28,11 @@ The primary retrieval metric. For each labeled resume, retrieve top-K jobs
 and check how many belong to the correct category (determined by job title
 keyword matching against the resume's category label).
 
+The relevance signal is a title-based proxy because the current job metadata
+does not include full job descriptions. That makes the absolute precision
+numbers useful for relative comparison, but not a perfect ground truth.
+Keyword sets are kept category-specific to reduce cross-category leakage.
+
   Precision@K : what fraction of the top-K retrieved jobs are relevant?
   MRR         : Mean Reciprocal Rank — 1/position of the first relevant hit.
                 MRR = 1.0 means the top-1 result is always correct.
@@ -62,6 +67,7 @@ OUTPUTS
 
   CSV files (outputs/evaluation/):
     metrics_summary.csv          — headline P@K and MRR numbers
+        category_metrics.csv         — per-category Precision@K and MRR breakdown
     word_count_metrics.csv       — Strategy 3 breakdown by word-count bucket
 
   Plots (outputs/evaluation/):
@@ -80,6 +86,8 @@ RUNTIME ESTIMATE (CPU)
 """
 
 import os
+import re
+import sys
 import time
 import numpy as np
 import pandas as pd
@@ -98,8 +106,31 @@ FAISS_INDEX_FILE  = "models/faiss_index.bin"
 JOB_METADATA_FILE = "models/job_metadata.csv"
 OUTPUT_DIR        = "outputs/evaluation"
 
-MODEL_NAME        = "all-MiniLM-L6-v2"
-MAX_SEQ_LENGTH    = 384
+# This file is expected to live in evaluation/ (one level below the project
+# root, alongside data_processed/ and models/ — see README.md's project
+# structure). RESUME_FILE / FAISS_INDEX_FILE / JOB_METADATA_FILE below are
+# relative paths that assume the script is *executed* from the project root
+# (e.g. `evaluation/evaluate_matching.py` from repo root), matching
+# every other pipeline script in this project. Running it from inside
+# evaluation/ itself will fail these relative lookups.
+_PROJECT_ROOT     = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+# NOTE: importing models.embedding_generator also executes its module-level
+# os.makedirs(OUTPUT_DIR) / os.makedirs(SHARD_DIR) calls as a side effect
+# (same behavior already present when matching_engine.py imports this
+# module). Harmless — it just means a models/_shards/ folder may appear —
+# but flagging it here so it isn't mistaken for this script's own output.
+try:
+    from models.embedding_generator import MODEL_NAME, MAX_SEQ_LENGTH
+except ImportError:
+    MODEL_NAME     = "all-MiniLM-L6-v2"
+    MAX_SEQ_LENGTH = 512
+    print(
+        "  NOTE: could not import MODEL_NAME / MAX_SEQ_LENGTH from embedding_generator.py — "
+        f"falling back to defaults ({MODEL_NAME}, {MAX_SEQ_LENGTH})."
+    )
 
 # K values for Precision@K — keep small and meaningful
 K_VALUES          = [1, 3, 5, 10]
@@ -122,19 +153,15 @@ plt.rcParams["figure.dpi"] = 120
 # ──────────────────────────────────────────────────────────────────────────────
 # CATEGORY → JOB TITLE KEYWORD MAPPING
 # ──────────────────────────────────────────────────────────────────────────────
-#
-# A job is "relevant" for a resume if its lowercase title contains any of the
-# listed keywords. Keys must exactly match the category values in the CSV.
-# The categories here are the 25 categories from Dataset 2 (resumes_cleaned.csv).
 
 CATEGORY_KEYWORDS = {
     "INFORMATION-TECHNOLOGY"  : ["information technology", "it support", "systems administrator", "it specialist", "technical support"],
     "DATA-SCIENCE"             : ["data scientist", "data science", "machine learning", "ml engineer", "ai engineer"],
-    "JAVA-DEVELOPER"           : ["java", "j2ee", "spring", "backend developer", "software engineer"],
-    "PYTHON-DEVELOPER"         : ["python", "django", "flask", "backend developer", "software engineer"],
+    "JAVA-DEVELOPER"           : ["java", "j2ee", "spring", "spring boot", "hibernate"],
+    "PYTHON-DEVELOPER"         : ["python", "django", "flask", "pandas", "numpy"],
     "WEB-DESIGNING"            : ["web designer", "ui designer", "ux designer", "frontend", "web developer"],
     "DEVOPS-ENGINEER"          : ["devops", "site reliability", "cloud engineer", "infrastructure", "sre"],
-    "DATABASE"                 : ["database", "dba", "sql developer", "data engineer"],
+    "DATABASE"                 : ["database", "dba", "sql", "oracle", "postgresql"],
     "HR"                       : ["hr", "human resources", "recruiter", "talent acquisition", "people operations"],
     "ADVOCATE"                 : ["lawyer", "attorney", "legal", "counsel", "paralegal"],
     "ARTS"                     : ["artist", "creative", "designer", "art director", "illustrator"],
@@ -143,9 +170,9 @@ CATEGORY_KEYWORDS = {
     "HEALTH-AND-FITNESS"       : ["fitness", "personal trainer", "health coach", "wellness", "nutritionist"],
     "CIVIL-ENGINEER"           : ["civil", "structural", "construction", "site engineer"],
     "FINANCE"                  : ["finance", "financial analyst", "accountant", "cpa", "controller"],
-    "HADOOP"                   : ["hadoop", "big data", "spark", "data engineer", "etl"],
+    "HADOOP"                   : ["hadoop", "big data", "spark", "mapreduce", "hive"],
     "BLOCKCHAIN"               : ["blockchain", "smart contract", "solidity", "web3", "crypto"],
-    "ETL-DEVELOPER"            : ["etl", "data pipeline", "data engineer", "informatica", "talend"],
+    "ETL-DEVELOPER"            : ["etl", "data pipeline", "informatica", "talend", "ssis"],
     "OPERATIONS-MANAGER"       : ["operations", "operations manager", "supply chain", "logistics"],
     "PMO"                      : ["project manager", "pmo", "scrum master", "agile coach", "program manager"],
     "BUSINESS-ANALYST"         : ["business analyst", "product analyst", "requirements", "systems analyst"],
@@ -155,8 +182,6 @@ CATEGORY_KEYWORDS = {
     "NETWORK-SECURITY-ENGINEER": ["network", "security", "cybersecurity", "infosec", "firewall"],
 }
 
-# Also support the alternate format used in Dataset 2 CSV (plain text, no hyphens).
-# We build a unified lookup by adding both forms.
 _ALSO_SUPPORT = {
     "Data Science"             : CATEGORY_KEYWORDS["DATA-SCIENCE"],
     "Java Developer"           : CATEGORY_KEYWORDS["JAVA-DEVELOPER"],
@@ -186,36 +211,22 @@ _ALSO_SUPPORT = {
 }
 CATEGORY_KEYWORDS.update(_ALSO_SUPPORT)
 
+# Pre-compiled word-boundary regex per category keyword.
+_CATEGORY_KEYWORD_PATTERNS = {
+    cat: [re.compile(rf'(?<!\w){re.escape(kw)}(?!\w)', re.IGNORECASE) for kw in kws]
+    for cat, kws in CATEGORY_KEYWORDS.items()
+}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DATA LOADING
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_data():
-    """
-    Load all required artefacts.
-
-    Returns:
-        labeled    : DataFrame — 2,481 resumes from Dataset 2 with category labels
-        all_resumes: DataFrame — all 11,654 resumes (for Strategy 2)
-        index      : faiss.Index — 108,702-vector job index
-        job_meta   : DataFrame — job metadata (title, company, location, etc.)
-        model      : SentenceTransformer — all-MiniLM-L6-v2
-
-    Column contract (from resumes_cleaned.csv produced by resume_pipeline.py):
-        cleaned_text, category, source, word_count
-
-    Column contract (from job_metadata.csv produced by embedding_generator.py):
-        embed_idx (index col), job_id, title, company, location,
-        experience_level, work_type, remote_allowed, salary_min, salary_max
-    """
-
     print("Loading data and models...")
 
-    # ── Resumes ───────────────────────────────────────────────────────────────
     all_resumes = pd.read_csv(RESUME_FILE)
 
-    # Sanity check: required columns must exist
     required_resume_cols = ["cleaned_text", "category", "source", "word_count"]
     missing = [c for c in required_resume_cols if c not in all_resumes.columns]
     if missing:
@@ -224,7 +235,6 @@ def load_data():
             f"Re-run resume_pipeline.py to regenerate."
         )
 
-    # Filter to labeled resumes that have a known category mapping
     labeled = all_resumes[
         all_resumes["category"].notna()
         & (all_resumes["category"].str.strip() != "")
@@ -236,7 +246,6 @@ def load_data():
     print(f"  Labeled + mapped       : {len(labeled):,}")
     print(f"  Unique categories      : {labeled['category'].nunique()}")
 
-    # ── FAISS index ───────────────────────────────────────────────────────────
     if not os.path.exists(FAISS_INDEX_FILE):
         raise FileNotFoundError(
             f"FAISS index not found at '{FAISS_INDEX_FILE}'. "
@@ -245,7 +254,6 @@ def load_data():
     index = faiss.read_index(FAISS_INDEX_FILE)
     print(f"  FAISS index            : {index.ntotal:,} vectors")
 
-    # ── Job metadata ──────────────────────────────────────────────────────────
     if not os.path.exists(JOB_METADATA_FILE):
         raise FileNotFoundError(
             f"Job metadata not found at '{JOB_METADATA_FILE}'. "
@@ -255,7 +263,6 @@ def load_data():
     job_meta["title_lower"] = job_meta["title"].fillna("").str.lower()
     print(f"  Job metadata           : {len(job_meta):,} rows")
 
-    # ── SBERT model ───────────────────────────────────────────────────────────
     model = SentenceTransformer(MODEL_NAME)
     model.max_seq_length = MAX_SEQ_LENGTH
     print(f"  SBERT model            : {MODEL_NAME} ({model.get_sentence_embedding_dimension()}-dim)")
@@ -267,26 +274,25 @@ def load_data():
 # RELEVANCE HELPER
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Cache: category → frozenset of relevant embed_idx values
 _relevance_cache: dict = {}
 
 
 def get_relevant_indices(category: str, job_meta: pd.DataFrame) -> set:
     """
     Return the set of embed_idx values for jobs relevant to a category.
-    A job is relevant if its lowercase title contains any keyword for that category.
-    Results are cached after the first call for each category.
+    Uses regex word boundaries to prevent substring matching inflation.
     """
     if category in _relevance_cache:
         return _relevance_cache[category]
 
-    keywords = CATEGORY_KEYWORDS.get(category, [])
-    if not keywords:
+    patterns = _CATEGORY_KEYWORD_PATTERNS.get(category, [])
+    if not patterns:
         _relevance_cache[category] = set()
         return set()
 
+    # FIX #1: Use the pre-compiled word-boundary regex patterns instead of substring 'in'
     mask = job_meta["title_lower"].apply(
-        lambda t: any(kw in t for kw in keywords)
+        lambda t: any(pat.search(t) is not None for pat in patterns)
     )
     result = set(job_meta[mask].index.tolist())
     _relevance_cache[category] = result
@@ -298,7 +304,6 @@ def get_relevant_indices(category: str, job_meta: pd.DataFrame) -> set:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def precision_at_k(retrieved: list, relevant: set, k: int) -> float:
-    """Fraction of top-K retrieved items that are in the relevant set."""
     if k <= 0:
         return 0.0
     hits = sum(1 for idx in retrieved[:k] if idx in relevant)
@@ -306,10 +311,6 @@ def precision_at_k(retrieved: list, relevant: set, k: int) -> float:
 
 
 def mrr(retrieved: list, relevant: set) -> float:
-    """
-    Mean Reciprocal Rank: 1 / (rank of first relevant result).
-    Returns 0.0 if no relevant result is found in the retrieved list.
-    """
     for rank, idx in enumerate(retrieved, start=1):
         if idx in relevant:
             return 1.0 / rank
@@ -326,31 +327,36 @@ def evaluate_labeled_resumes(
     index    : faiss.Index,
     job_meta : pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Encode all labeled resumes and compute Precision@K and MRR for each one.
-    This single pass is shared by Strategies 1 and 3 to avoid encoding
-    the same resumes multiple times.
-
-    Returns a DataFrame with one row per resume and columns:
-        category, word_count, source,
-        P@1, P@3, P@5, P@10,
-        MRR, top1_score, n_relevant
-    """
 
     print(f"\nEvaluating {len(labeled):,} labeled resumes (Strategies 1, 3)...")
+
+    evaluable_mask = labeled["category"].map(lambda cat: bool(get_relevant_indices(cat, job_meta)))
+    evaluable = labeled[evaluable_mask].copy().reset_index(drop=True)
+    skipped_count = len(labeled) - len(evaluable)
+
+    if skipped_count:
+        skipped_categories = sorted(labeled.loc[~evaluable_mask, "category"].dropna().unique().tolist())
+        print(
+            f"  Skipping {skipped_count:,} labeled resumes across {len(skipped_categories)} categories "
+            "with no matching jobs in the index."
+        )
+
+    if evaluable.empty:
+        print("  No labeled resumes have matching jobs in the index after keyword filtering.")
+        return pd.DataFrame(columns=["category", "word_count", "source", "MRR", "top1_score", "n_relevant", *[f"P@{k}" for k in K_VALUES]])
+
     print(f"  Encoding in batches of 64...")
 
-    texts      = labeled["cleaned_text"].fillna("").tolist()
-    categories = labeled["category"].tolist()
+    texts      = evaluable["cleaned_text"].fillna("").tolist()
+    categories = evaluable["category"].tolist()
 
-    # Encode all resumes in one batched call — much faster than one-by-one
     t0         = time.time()
     embeddings = model.encode(
         texts,
         batch_size=64,
         show_progress_bar=True,
         convert_to_numpy=True,
-        normalize_embeddings=False,  # we normalize below before FAISS search
+        normalize_embeddings=False,
     ).astype("float32")
     faiss.normalize_L2(embeddings)
     print(f"  Encoding done in {time.time() - t0:.1f}s")
@@ -358,22 +364,21 @@ def evaluate_labeled_resumes(
     results = []
 
     print("  Searching FAISS index and computing metrics...")
-    for i in tqdm(range(len(labeled)), desc="  Evaluating"):
-        category = categories[i]
-        vec      = embeddings[i : i + 1]   # shape (1, 384)
-
+    for i in tqdm(range(len(evaluable)), desc="  Evaluating"):
+        category     = categories[i]
+        vec          = embeddings[i : i + 1]
         scores, indices = index.search(vec, RETRIEVAL_TOP_K)
-        retrieved       = indices[0].tolist()
-        relevant_set    = get_relevant_indices(category, job_meta)
+        retrieved    = indices[0].tolist()
+        
+        # Safe to access cached relevance directly — evaluable_mask guarantees it is non-empty
+        relevant_set = get_relevant_indices(category, job_meta)
 
-        if not relevant_set:
-            # Category has no matching jobs in the index — skip this resume
-            continue
+        # FIX #2: Dead code check 'if not relevant_set: continue' safely removed here
 
         row = {
             "category"  : category,
-            "word_count": labeled.iloc[i]["word_count"],
-            "source"    : labeled.iloc[i]["source"],
+            "word_count": evaluable.iloc[i]["word_count"],
+            "source"    : evaluable.iloc[i]["source"],
             "MRR"       : mrr(retrieved, relevant_set),
             "top1_score": float(scores[0][0]) if len(scores[0]) > 0 else 0.0,
             "n_relevant": len(relevant_set),
@@ -384,7 +389,7 @@ def evaluate_labeled_resumes(
         results.append(row)
 
     df = pd.DataFrame(results)
-    print(f"  Evaluated : {len(df):,} resumes  ({len(labeled) - len(df)} skipped — no relevant jobs found)")
+    print(f"  Evaluated : {len(df):,} resumes")
     return df
 
 
@@ -393,11 +398,6 @@ def evaluate_labeled_resumes(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def strategy1_overall_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute and print the overall headline metrics from the per-resume results.
-    Returns a summary DataFrame.
-    """
-
     print("\n" + "=" * 60)
     print("  STRATEGY 1 — Overall Precision@K + MRR")
     print("=" * 60)
@@ -429,6 +429,32 @@ def strategy1_overall_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
     return summary_df
 
 
+def strategy1_category_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
+    metric_cols = [f"P@{k}" for k in K_VALUES] + ["MRR"]
+    metric_cols = [col for col in metric_cols if col in results_df.columns]
+
+    if not metric_cols:
+        return pd.DataFrame()
+
+    category_df = (
+        results_df.groupby("category", observed=True)
+        .agg(
+            n=("category", "size"),
+            **{col: (col, "mean") for col in metric_cols},
+        )
+        .sort_index()
+    )
+
+    print("\n  Per-category breakdown (lower MRR/P@K = weaker retrieval):")
+    print(category_df.round(4).to_string())
+
+    path = os.path.join(OUTPUT_DIR, "category_metrics.csv")
+    category_df.to_csv(path)
+    print(f"  Saved: {path}")
+
+    return category_df
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # STRATEGY 2 — SCORE SEPARATION (all resumes, no labels)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -439,20 +465,10 @@ def strategy2_score_separation(
     index       : faiss.Index,
     n_sample    : int = SCORE_SEP_SAMPLE,
 ) -> pd.DataFrame:
-    """
-    Sample resumes from the full dataset (including unlabeled), retrieve their
-    top-10 matched jobs, sample 10 random jobs for comparison, and record the
-    mean cosine scores for each group.
-
-    Returns a DataFrame with columns: top10_mean, random_mean, gap
-    (one row per sampled resume).
-    """
-
     print("\n" + "=" * 60)
     print("  STRATEGY 2 — Score Separation (all resumes, no labels needed)")
     print("=" * 60)
 
-    # Drop rows with empty text, then sample
     valid   = all_resumes[all_resumes["cleaned_text"].notna()
                           & (all_resumes["cleaned_text"].str.strip() != "")].copy()
     sample  = valid.sample(min(n_sample, len(valid)), random_state=42).reset_index(drop=True)
@@ -477,11 +493,9 @@ def strategy2_score_separation(
     for i in tqdm(range(len(sample)), desc="  Score separation"):
         vec = embeddings[i : i + 1]
 
-        # Top-10 matched scores
         scores, _ = index.search(vec, 10)
         top10_mean = float(np.mean(scores[0]))
 
-        # Random job scores — reconstruct stored vectors and compute dot product
         rand_idxs = rng.integers(0, n_jobs, size=RANDOM_PAIRS_N).tolist()
         rand_scores = []
         for r_idx in rand_idxs:
@@ -509,12 +523,17 @@ def strategy2_score_separation(
     print(f"  Mean separation gap  : {mean_gap:.4f}")
     print(f"  Resumes with gap > 0 : {pct_positive:.1f}%")
 
+    print(
+        "  Note: the thresholds below are project-specific heuristics, not universal SBERT cutoffs, "
+        "because cosine similarity baselines are not centered near zero."
+    )
+
     if mean_gap >= 0.15:
-        print("  Interpretation: STRONG discrimination — system clearly prefers relevant jobs.")
+        print("  Interpretation: strong discrimination for this dataset.")
     elif mean_gap >= 0.07:
-        print("  Interpretation: MODERATE discrimination — system shows meaningful preference.")
+        print("  Interpretation: moderate discrimination for this dataset.")
     else:
-        print("  Interpretation: WEAK discrimination — top results barely outscore random pairs.")
+        print("  Interpretation: weak discrimination for this dataset.")
 
     return sep_df
 
@@ -523,17 +542,7 @@ def strategy2_score_separation(
 # STRATEGY 3 — WORD COUNT SENSITIVITY
 # ──────────────────────────────────────────────────────────────────────────────
 
-def strategy4_word_count(results_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Group resumes into word-count buckets and report P@10 per bucket.
-    Bucket boundaries match real resume length distribution:
-        <100 words  : very short (likely incomplete)
-        100–200     : short
-        200–350     : medium (most common range)
-        350–500     : long
-        500+        : very long (may be truncated at 5,000 words by pipeline)
-    """
-
+def strategy3_word_count(results_df: pd.DataFrame) -> pd.DataFrame:
     print("\n" + "=" * 60)
     print("  STRATEGY 3 — Word Count Sensitivity")
     print("=" * 60)
@@ -573,18 +582,12 @@ def strategy4_word_count(results_df: pd.DataFrame) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def plot_precision_at_k(results_df: pd.DataFrame):
-    """
-    Plot 1: Precision@K curve — how precision changes as K increases.
-    Also shows per-category lines to reveal spread.
-    """
-
     k_vals  = K_VALUES
     mean_p  = [results_df[f"P@{k}"].mean() for k in k_vals if f"P@{k}" in results_df.columns]
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle("Strategy 1 — Precision@K and MRR", fontsize=13, fontweight="bold")
 
-    # Left: overall P@K curve
     axes[0].plot(k_vals, mean_p, "o-", color="#4C72B0", linewidth=2.5, markersize=7)
     for k, p in zip(k_vals, mean_p):
         axes[0].annotate(f"{p:.3f}", (k, p), textcoords="offset points",
@@ -595,7 +598,6 @@ def plot_precision_at_k(results_df: pd.DataFrame):
     axes[0].set_xticks(k_vals)
     axes[0].set_ylim(0, 1)
 
-    # Right: MRR distribution as histogram
     if "MRR" in results_df.columns:
         axes[1].hist(results_df["MRR"].dropna(), bins=20, color="#DD8452", edgecolor="white")
         axes[1].axvline(results_df["MRR"].mean(), color="#C44E52", linestyle="--",
@@ -613,14 +615,9 @@ def plot_precision_at_k(results_df: pd.DataFrame):
 
 
 def plot_score_separation(sep_df: pd.DataFrame):
-    """
-    Plot 2: Score separation — top-10 vs random cosine score distributions.
-    """
-
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle("Strategy 2 — Score Separation (Top-10 vs Random)", fontsize=13, fontweight="bold")
 
-    # Left: overlapping histograms
     axes[0].hist(sep_df["top10_mean"], bins=40, alpha=0.65, color="#55A868",
                  label="Mean top-10 score", edgecolor="white")
     axes[0].hist(sep_df["random_mean"], bins=40, alpha=0.65, color="#C44E52",
@@ -634,7 +631,6 @@ def plot_score_separation(sep_df: pd.DataFrame):
     axes[0].set_ylabel("Count")
     axes[0].legend(fontsize=8)
 
-    # Right: gap distribution
     axes[1].hist(sep_df["gap"], bins=40, color="#4C72B0", edgecolor="white")
     axes[1].axvline(sep_df["gap"].mean(), color="#1c3a7d", linestyle="--",
                     linewidth=2, label=f"Mean gap = {sep_df['gap'].mean():.3f}")
@@ -652,10 +648,6 @@ def plot_score_separation(sep_df: pd.DataFrame):
 
 
 def plot_word_count_sensitivity(wc_df: pd.DataFrame):
-    """
-    Plot 3: P@10 by word-count bucket — bar chart.
-    """
-
     if "P@10" not in wc_df.columns or wc_df.empty:
         print("  Skipping word count plot — P@10 column not available.")
         return
@@ -676,7 +668,6 @@ def plot_word_count_sensitivity(wc_df: pd.DataFrame):
     ax.set_ylabel("Precision@10")
     ax.set_ylim(0, 1)
 
-    # Annotate bars with value and n
     for i, (bar, val) in enumerate(zip(bars, plot_data.values)):
         label = f"{val:.3f}"
         if n_data is not None and not pd.isna(n_data.iloc[i]):
@@ -699,7 +690,6 @@ def plot_word_count_sensitivity(wc_df: pd.DataFrame):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-
     t_start = time.time()
 
     print("=" * 65)
@@ -707,18 +697,14 @@ def main():
     print("  3 strategies: P@K+MRR | Score Separation | Word Count")
     print("=" * 65)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
     labeled, all_resumes, index, job_meta, model = load_data()
 
-    # Pre-warm the relevance cache for all categories present in the data.
-    # This avoids repeated full scans of job_meta during the evaluation loop.
     print("\nPre-warming relevance cache...")
     unique_cats = labeled["category"].unique().tolist()
     for cat in unique_cats:
         get_relevant_indices(cat, job_meta)
     print(f"  Cached relevance sets for {len(unique_cats)} categories")
 
-    # ── Shared encode + evaluate pass (used by Strategies 1 and 3) ───────────
     results_df = evaluate_labeled_resumes(labeled, model, index, job_meta)
 
     if results_df.empty:
@@ -726,28 +712,24 @@ def main():
         print("Check that CATEGORY_KEYWORDS matches the category values in your CSV.")
         return
 
-    # ── Strategy 1 ────────────────────────────────────────────────────────────
     summary_df = strategy1_overall_metrics(results_df)
-
-    # ── Strategy 2 ────────────────────────────────────────────────────────────
+    category_df = strategy1_category_metrics(results_df)
     sep_df = strategy2_score_separation(all_resumes, model, index)
+    wc_df = strategy3_word_count(results_df)
 
-    # ── Strategy 3 ────────────────────────────────────────────────────────────
-    wc_df = strategy4_word_count(results_df)
-
-    # ── Plots ─────────────────────────────────────────────────────────────────
     print("\nGenerating plots...")
     plot_precision_at_k(results_df)
     plot_score_separation(sep_df)
     plot_word_count_sensitivity(wc_df)
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     elapsed = time.time() - t_start
     print(f"\n{'=' * 65}")
     print(f"  EVALUATION COMPLETE  ({elapsed / 60:.1f} min)")
     print(f"{'=' * 65}")
     print(f"  Resumes evaluated  : {len(results_df):,}")
     print(f"  Categories covered : {results_df['category'].nunique()}")
+    if not category_df.empty:
+        print(f"  Per-category rows  : {len(category_df):,}")
 
     for k in K_VALUES:
         col = f"P@{k}"
